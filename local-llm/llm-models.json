@@ -1,0 +1,191 @@
+{
+  "MinOllamaVersion": "0.21.0",
+  "Default": "qcoder30",
+  "KeepAlive": "-1",
+  "OllamaAppPath": "%LOCALAPPDATA%\\Programs\\Ollama\\ollama app.exe",
+  "OllamaCommunityRoot": "%USERPROFILE%\\.ollama-community",
+  "FreeCodeRoot": "D:\\repos\\free-code",
+  "RequireAdvertisedTools": true,
+  "NoThinkProxyPort": 11435,
+  "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,ToolSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop",
+  "Models": {
+    "devstral": {
+      "DisplayName": "Devstral Small 2 24B Instruct",
+      "ShortName": "dev",
+      "Root": "devstral",
+      "SourceType": "remote",
+      "RemoteModel": "devstral-small-2:latest",
+      "ParserNote": "Parser=none is intentional: devstral-small-2's GGUF template self-declares persona, [SYSTEM_PROMPT]/[TOOL_CALLS] tags, and capabilities=[completion,vision,tools]. Adding our own renderer would double-template.",
+      "Parser": "none",
+      "LimitTools": false,
+      "Tier": "recommended",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536
+      }
+    },
+    "qcoder30": {
+      "DisplayName": "Qwen3-Coder-30B-A3B Instruct Heretic",
+      "ShortName": "qcoder",
+      "Root": "qcoder30",
+      "SourceType": "gguf",
+      "Repo": "mradermacher/Qwen3-Coder-30B-A3B-Instruct-Heretic-i1-GGUF",
+      "Quants": {
+        "q4": "Qwen3-Coder-30B-A3B-Instruct-Heretic.i1-Q4_K_M.gguf",
+        "q6": "Qwen3-Coder-30B-A3B-Instruct-Heretic.i1-Q6_K.gguf"
+      },
+      "Quant": "q4",
+      "QuantShortcut": "qcoder30",
+      "Parser": "qwen3coder",
+      "LimitTools": true,
+      "Tier": "recommended",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536
+      }
+    },
+    "q36": {
+      "DisplayName": "Qwen 3.6 35B A3B Official Q4",
+      "Root": "q36",
+      "SourceType": "remote",
+      "RemoteModel": "qwen3.6:35b-a3b-q4_K_M",
+      "ParserNote": "Parser=none is intentional: the official qwen3.6:35b-a3b-q4_K_M registry pull ships with its own template and tool-call config. Adding our own renderer would double-template.",
+      "Parser": "none",
+      "LimitTools": true,
+      "Tier": "recommended",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536
+      }
+    },
+    "q36hauhau": {
+      "DisplayName": "Qwen 3.6 35B A3B Uncensored HauhauCS Aggressive IQ4_NL",
+      "Root": "q36hau",
+      "SourceType": "gguf",
+      "Repo": "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive",
+      "File": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf",
+      "Parser": "qwen36",
+      "LimitTools": true,
+      "Tier": "experimental",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536
+      }
+    },
+    "q36plus": {
+      "DisplayName": "Qwen 3.6 35B A3B Plus Uncensored Wasserstein",
+      "ShortName": "q36p",
+      "Root": "q36plus",
+      "SourceType": "gguf",
+      "Repo": "LuffyTheFox/Qwen3.6-35B-A3B-Plus-Uncensored-Wasserstein-GGUF",
+      "Quants": {
+        "iq2m": "Qwen3.6-35B-A3B-Plus-Uncensored-IQ2_M.gguf",
+        "iq4xs": "Qwen3.6-35B-A3B-Plus-Uncensored-IQ4_XS.gguf",
+        "iq4nl": "Qwen3.6-35B-A3B-Plus-Uncensored-IQ4_NL.gguf",
+        "mxfp4": "Qwen3.6-35B-A3B-Plus-Uncensored-MXFP4_MOE.gguf",
+        "q4kp": "Qwen3.6-35B-A3B-Plus-Uncensored-Q4_K_P.gguf",
+        "q6kp": "Qwen3.6-35B-A3B-Plus-Uncensored-Q6_K_P.gguf",
+        "q8": "Qwen3.6-35B-A3B-Plus-Uncensored-Q8_0.gguf"
+      },
+      "Quant": "iq4nl",
+      "QuantShortcut": "q36p",
+      "Parser": "qwen36",
+      "LimitTools": true,
+      "Tier": "recommended",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536,
+        "128": 131072
+      }
+    },
+    "q36heretic": {
+      "DisplayName": "Qwen 3.6 35B A3B Abliterated Heretic",
+      "Root": "q36h",
+      "SourceType": "gguf",
+      "Repo": "Youssofal/Qwen3.6-35B-A3B-Abliterated-Heretic-GGUF",
+      "Quants": {
+        "q4": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M/Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf",
+        "q6": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q6_K/Qwen3.6-35B-A3B-Abliterated-Heretic-Q6_K.gguf",
+        "q8": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q8_0/Qwen3.6-35B-A3B-Abliterated-Heretic-Q8_0.gguf"
+      },
+      "Quant": "q4",
+      "QuantShortcut": "q36h",
+      "Parser": "qwen36",
+      "LimitTools": true,
+      "Tier": "experimental",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536,
+        "128": 131072
+      }
+    },
+    "q27heretic": {
+      "DisplayName": "Qwen 3.6 27B Abliterated Heretic Uncensored",
+      "ShortName": "q27",
+      "Root": "q27h",
+      "SourceType": "gguf",
+      "Repo": "Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF",
+      "Quants": {
+        "q4": "Qwen3.6-27B-Abliterated-Heretic-Uncensored-Q4_K_M.gguf",
+        "q5": "Qwen3.6-27B-Abliterated-Heretic-Uncensored-Q5_K_M.gguf",
+        "q6": "Qwen3.6-27B-Abliterated-Heretic-Uncensored-Q6_K.gguf",
+        "q8": "Qwen3.6-27B-Abliterated-Heretic-Uncensored-Q8_0.gguf"
+      },
+      "Quant": "q4",
+      "QuantShortcut": "q27h",
+      "Parser": "qwen36",
+      "LimitTools": true,
+      "Tier": "experimental",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536,
+        "128": 131072
+      }
+    },
+    "q27hauhau": {
+      "DisplayName": "Qwen 3.6 27B Uncensored HauhauCS Balanced",
+      "Root": "q27hau",
+      "SourceType": "gguf",
+      "Repo": "HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced",
+      "Quants": {
+        "q4kp": "Qwen3.6-27B-Uncensored-HauhauCS-Balanced-Q4_K_P.gguf",
+        "iq4xs": "Qwen3.6-27B-Uncensored-HauhauCS-Balanced-IQ4_XS.gguf"
+      },
+      "Quant": "q4kp",
+      "QuantShortcut": "q27hau",
+      "Parser": "qwen36",
+      "LimitTools": true,
+      "Tier": "recommended",
+      "Contexts": {
+        "": 65536,
+        "fast": 32768,
+        "deep": 65536,
+        "128": 131072
+      }
+    },
+    "q36opus47abl": {
+      "DisplayName": "Qwen 3.6 35B A3B Claude 4.7 Opus Abliterated",
+      "ShortName": "qop",
+      "Root": "q36opusa",
+      "SourceType": "gguf",
+      "Repo": "bkerler/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-gguf",
+      "File": "Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-Q4_K_M.gguf",
+      "Parser": "qwen36-think",
+      "ThinkingPolicy": "keep",
+      "LimitTools": true,
+      "Tier": "experimental",
+      "Contexts": {
+        "fast": 8192,
+        "": 32768
+      }
+    }
+  },
+  "CommandAliases": {}
+}
