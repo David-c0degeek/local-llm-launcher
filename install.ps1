@@ -175,10 +175,10 @@ function Show-Diagnostics {
     $bun = Get-Command bun -ErrorAction SilentlyContinue
     if ($bun) {
         $ver = & bun --version 2>&1
-        Write-Host "bun      : ok  ($ver)  (only needed for free-code launches)" -ForegroundColor Green
+        Write-Host "bun      : ok  ($ver)  (only needed for Unshackled launches)" -ForegroundColor Green
     }
     else {
-        Write-Host "bun      : missing (only needed for free-code launches)" -ForegroundColor DarkGray
+        Write-Host "bun      : missing (only needed for Unshackled launches)" -ForegroundColor DarkGray
     }
 
     Write-Host ""

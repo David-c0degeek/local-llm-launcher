@@ -1,6 +1,6 @@
 # =========================
 # Local LLM profile engine
-# Ollama + Claude Code + free-code
+# Ollama + Claude Code + Unshackled
 # Windows / PowerShell only — does not work in WSL/bash.
 # CLEAN / DRY / KISS
 # =========================
@@ -38,7 +38,14 @@ function Import-LocalLLMConfig {
 
     $cfg.OllamaAppPath = Expand-LocalLLMPath $cfg.OllamaAppPath
     $cfg.OllamaCommunityRoot = Expand-LocalLLMPath $cfg.OllamaCommunityRoot
-    $cfg.FreeCodeRoot = Expand-LocalLLMPath $cfg.FreeCodeRoot
+
+    # Migrate the pre-rename field name (FreeCodeRoot → UnshackledRoot) on read.
+    if ($cfg.Contains("FreeCodeRoot") -and -not $cfg.Contains("UnshackledRoot")) {
+        $cfg.UnshackledRoot = $cfg.FreeCodeRoot
+        $cfg.Remove("FreeCodeRoot") | Out-Null
+    }
+
+    $cfg.UnshackledRoot = Expand-LocalLLMPath $cfg.UnshackledRoot
 
     if (-not $cfg.ContainsKey("RequireAdvertisedTools")) {
         $cfg.RequireAdvertisedTools = $true
@@ -1564,7 +1571,7 @@ function listorphans {
 }
 
 # -------------------------
-# Claude / free-code / proxy helpers
+# Claude / Unshackled / proxy helpers
 # -------------------------
 
 function Save-ClaudeEnvBackup {
@@ -1632,14 +1639,14 @@ function Stop-NoThinkProxy {
     $script:NoThinkProxyProcess = $null
 }
 
-function Invoke-FreeCodeCli {
+function Invoke-UnshackledCli {
     [CmdletBinding()]
     param(
         [Parameter(ValueFromRemainingArguments)]
         [string[]]$CliArgs
     )
 
-    $root = $script:Cfg.FreeCodeRoot
+    $root = $script:Cfg.UnshackledRoot
 
     if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
         throw "bun is not on PATH."
@@ -1648,12 +1655,12 @@ function Invoke-FreeCodeCli {
     $nodeModules = Join-Path $root "node_modules"
 
     if (-not (Test-Path $nodeModules)) {
-        Write-Host "Installing free-code dependencies..." -ForegroundColor Cyan
+        Write-Host "Installing Unshackled dependencies..." -ForegroundColor Cyan
 
         & bun install --cwd $root
 
         if ($LASTEXITCODE -ne 0) {
-            throw "bun install failed for free-code"
+            throw "bun install failed for Unshackled"
         }
     }
 
@@ -1668,7 +1675,7 @@ function Start-ClaudeWithOllamaModel {
         [Nullable[bool]]$IncludeInlineToolSchemas,
         [switch]$UseQ8,
         [switch]$LimitTools,
-        [switch]$FreeCode,
+        [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$SkipToolCheck
     )
 
@@ -1749,7 +1756,7 @@ function Start-ClaudeWithOllamaModel {
         $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
         $env:DISABLE_PROMPT_CACHING = "1"
 
-        $backendLabel = if ($FreeCode) { "free-code" } else { "claude" }
+        $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
         $thinkingLabel = if ($keepThinking) { "kept (direct to Ollama)" } else { "disabled" }
 
@@ -1780,8 +1787,8 @@ function Start-ClaudeWithOllamaModel {
             )
         }
 
-        if ($FreeCode) {
-            Invoke-FreeCodeCli @launchArgs
+        if ($Unshackled) {
+            Invoke-UnshackledCli @launchArgs
         }
         else {
             & claude --model $Model @launchArgs
@@ -2386,7 +2393,7 @@ function Invoke-ModelShortcut {
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [switch]$UseQ8,
-        [switch]$FreeCode,
+        [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$Chat
     )
 
@@ -2416,7 +2423,7 @@ function Invoke-ModelShortcut {
         ThinkingPolicy = $thinkingPolicy
         UseQ8          = $UseQ8
         LimitTools     = [bool]$def.LimitTools
-        FreeCode       = $FreeCode
+        Unshackled     = $Unshackled
     }
 
     if ($def.Contains("IncludeInlineToolSchemas")) {
@@ -2491,7 +2498,7 @@ function Register-ModelShortcuts {
                 param(
                     [string]$Ctx = "",
                     [string]$Quant,
-                    [Alias("Fc")][switch]$FreeCode,
+                    [Alias("Fc", "FreeCode")][switch]$Unshackled,
                     [switch]$Chat,
                     [switch]$Q8
                 )
@@ -2501,7 +2508,7 @@ function Register-ModelShortcuts {
                     return
                 }
 
-                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -UseQ8:$Q8 -FreeCode:$FreeCode -Chat:$Chat
+                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -UseQ8:$Q8 -Unshackled:$Unshackled -Chat:$Chat
             }.GetNewClosure())
     }
 
@@ -2601,7 +2608,7 @@ function Get-DefaultModelKey {
 }
 
 function llmdefault     { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" }
-function llmdefaultfc   { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -FreeCode }
+function llmdefaultfc   { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Unshackled }
 function llmdefaultchat { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Chat }
 
 # Enforcer — use local backend wrapper.
@@ -2756,7 +2763,7 @@ function Select-LLMContextKey {
 function Select-LLMAction {
     $actions = @(
         [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-        [pscustomobject]@{ Key = "fc"; Label = "free-code"; Description = "Local agent via free-code" },
+        [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
         [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" },
         [pscustomobject]@{ Key = "benchmark"; Label = "Benchmark"; Description = "Run ospeed for selected alias" },
         [pscustomobject]@{ Key = "setup"; Label = "Setup/create alias only"; Description = "Download/create selected alias" },
@@ -2831,7 +2838,7 @@ function Invoke-LLMSelection {
         }
 
         "fc" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -FreeCode -UseQ8:$UseQ8
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8
         }
 
         "claude" {
@@ -2967,8 +2974,8 @@ function Show-LLMQuickReference {
 
     Write-Host @'
 One function per model — flags select what to do.
-  qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, free-code)
-  q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, free-code)
+  qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, Unshackled)
+  q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, Unshackled)
   dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
   q36p -Ctx 128 -Fc             Big context (Qwen 3.6 Plus, 128k)
   q36p -Chat                    Raw ollama chat, no Claude Code
@@ -2979,7 +2986,7 @@ One function per model — flags select what to do.
 
 Flags
   -Ctx <name>     One of the model's contexts (e.g. fast, deep, 128). Omit for default.
-  -Fc             Use free-code instead of Claude Code.
+  -Fc             Use Unshackled instead of Claude Code (alias for -Unshackled).
   -Chat           Run plain ollama chat (skips Claude Code entirely).
   -Q8             Set OLLAMA_KV_CACHE_TYPE=q8_0 for this launch.
   -Quant <name>   Switch the model's selected quant (no launch). GGUF models only.

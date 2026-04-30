@@ -1,6 +1,16 @@
 # Changelog
 
-Past-tense record of shipped changes. Active TODO lives in [`plan-next.md`](./plan-next.md). Architectural review in [`analysis.md`](./analysis.md).
+Past-tense record of shipped changes.
+
+## 2026-04-30 — Unshackled rename
+
+The `free-code` fork was renamed to [Unshackled](https://github.com/David-c0degeek/unshackled). Propagated through this project:
+
+- JSON config field `FreeCodeRoot` → `UnshackledRoot`. Old configs are migrated on read (the field is renamed in memory; saved configs use the new name).
+- Internal function `Invoke-FreeCodeCli` → `Invoke-UnshackledCli`.
+- Switch parameter `-FreeCode` → `-Unshackled` on `Start-ClaudeWithOllamaModel`, `Invoke-ModelShortcut`, and the per-model shortcut functions. `-FreeCode` and `-Fc` remain as aliases — muscle memory like `q27 -Fc` is unchanged.
+- User-visible labels updated: launcher banner, wizard action label, install diagnostics, README, quick reference (`llmdocs`).
+- Local folder path (`D:\repos\free-code`) was not renamed and still works as the configured `UnshackledRoot`.
 
 ## 2026-04-29 — second-pass refactor
 

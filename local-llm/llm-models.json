@@ -4,7 +4,7 @@
   "KeepAlive": "-1",
   "OllamaAppPath": "%LOCALAPPDATA%\\Programs\\Ollama\\ollama app.exe",
   "OllamaCommunityRoot": "%USERPROFILE%\\.ollama-community",
-  "FreeCodeRoot": "D:\\repos\\free-code",
+  "UnshackledRoot": "D:\\repos\\free-code",
   "RequireAdvertisedTools": true,
   "NoThinkProxyPort": 11435,
   "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,ToolSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop",

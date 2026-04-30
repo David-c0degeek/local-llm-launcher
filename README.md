@@ -1,6 +1,6 @@
 # local-llm-launcher
 
-Run [Claude Code](https://claude.com/claude-code) (or [free-code](https://github.com/) — local fork) against a local Ollama backend, with proper handling of thinking blocks, parser config, KV cache, and per-model tool restrictions.
+Run [Claude Code](https://claude.com/claude-code) (or [Unshackled](https://github.com/David-c0degeek/unshackled) — Claude Code fork) against a local Ollama backend, with proper handling of thinking blocks, parser config, KV cache, and per-model tool restrictions.
 
 Windows / PowerShell only.
 
@@ -10,7 +10,7 @@ A PowerShell profile that:
 
 - Catalogs local LLMs in `llm-models.json` (Ollama remote pulls or HuggingFace GGUFs).
 - Auto-builds Ollama aliases per (model, context-length) with the right Modelfile renderer/parser/sampling for each model family (Qwen3-Coder, Qwen 3.6, Mistral/Devstral).
-- Launches Claude Code or free-code against Ollama with the correct env vars (`ANTHROPIC_BASE_URL`, model overrides, thinking-disabled, prompt-caching off).
+- Launches Claude Code or Unshackled against Ollama with the correct env vars (`ANTHROPIC_BASE_URL`, model overrides, thinking-disabled, prompt-caching off).
 - Routes traffic through a small Python proxy (`no-think-proxy.py`) that strips Anthropic-specific `thinking`/`reasoning` fields Ollama can't handle. Thinking-trained models (`ThinkingPolicy: keep`) bypass the proxy.
 - Exposes one PowerShell function per model with flag-based switches.
 
@@ -43,8 +43,8 @@ After install, open a fresh PowerShell and run `init` to build Ollama aliases fo
 One function per model, flag-based:
 
 ```
-qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, free-code)
-q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, free-code)
+qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, Unshackled)
+q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, Unshackled)
 dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
 q36p -Ctx 128 -Fc             Big context (Qwen 3.6 Plus, 128k)
 q36p -Chat                    Raw ollama chat, no Claude Code
@@ -57,7 +57,7 @@ llm                           Guided wizard
 | Flag | Effect |
 |------|--------|
 | `-Ctx <name>` | One of the model's context keys (e.g. `fast`, `deep`, `128`). Omit for default. |
-| `-Fc` (alias `-FreeCode`) | Use free-code instead of Claude Code. |
+| `-Fc` (alias `-FreeCode`, canonical `-Unshackled`) | Use Unshackled instead of Claude Code. |
 | `-Chat` | Run plain `ollama run`, skip Claude Code entirely. |
 | `-Q8` | Set `OLLAMA_KV_CACHE_TYPE=q8_0` for this launch. |
 | `-Quant <name>` | Switch the model's selected GGUF quant. No launch — rebuilds the alias. |
@@ -129,5 +129,3 @@ Trim-LLMBenchHistory -OlderThanDays 90           # apply pruning
 ## More
 
 - `CHANGELOG.md` — what shipped, when.
-- `plan-next.md` — current TODO list.
-- `analysis.md` — second-pass architectural review.
