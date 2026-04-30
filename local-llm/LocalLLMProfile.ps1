@@ -29,12 +29,48 @@ function Expand-LocalLLMPath {
     return $expanded
 }
 
+function Get-LocalLLMSettingsPath {
+    if ($env:LOCAL_LLM_SETTINGS) {
+        return $env:LOCAL_LLM_SETTINGS
+    }
+
+    return Join-Path $script:LLMProfileRoot "settings.json"
+}
+
+function Import-LocalLLMSettings {
+    # Per-machine overrides: paths, preferences. Sits next to llm-models.json
+    # but is gitignored so it never lands in a public repo. Top-level scalars
+    # only — Models and CommandAliases stay in the catalog.
+    $path = Get-LocalLLMSettingsPath
+
+    if (-not (Test-Path $path)) {
+        return @{}
+    }
+
+    try {
+        return (Get-Content -Raw -Path $path | ConvertFrom-Json -AsHashtable)
+    }
+    catch {
+        Write-Warning "Could not parse $path : $($_.Exception.Message). Ignoring."
+        return @{}
+    }
+}
+
 function Import-LocalLLMConfig {
     if (-not (Test-Path $script:LocalLLMConfigPath)) {
         throw "Local LLM config not found: $script:LocalLLMConfigPath"
     }
 
     $cfg = Get-Content -Raw -Path $script:LocalLLMConfigPath | ConvertFrom-Json -AsHashtable
+
+    # Overlay per-machine settings (gitignored). Models/CommandAliases stay
+    # in the catalog; everything else can be overridden per-host.
+    $settings = Import-LocalLLMSettings
+
+    foreach ($key in @($settings.Keys)) {
+        if ($key -in @("Models", "CommandAliases")) { continue }
+        $cfg[$key] = $settings[$key]
+    }
 
     $cfg.OllamaAppPath = Expand-LocalLLMPath $cfg.OllamaAppPath
     $cfg.OllamaCommunityRoot = Expand-LocalLLMPath $cfg.OllamaCommunityRoot
@@ -55,7 +91,57 @@ function Import-LocalLLMConfig {
         $cfg.NoThinkProxyPort = 11435
     }
 
+    if (-not $cfg.ContainsKey("UnshackledRepoUrl")) {
+        $cfg.UnshackledRepoUrl = "https://github.com/David-c0degeek/unshackled"
+    }
+
     return $cfg
+}
+
+function Set-LocalLLMSetting {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)][string]$Key,
+        [Parameter(Position = 1)][AllowNull()][AllowEmptyString()][object]$Value
+    )
+
+    if ($Key -in @("Models", "CommandAliases")) {
+        throw "'$Key' belongs in llm-models.json (the catalog), not settings.json. Edit the catalog directly."
+    }
+
+    $path = Get-LocalLLMSettingsPath
+
+    $settings = if (Test-Path $path) {
+        try {
+            Get-Content -Raw -Path $path | ConvertFrom-Json -AsHashtable
+        } catch {
+            [ordered]@{}
+        }
+    } else {
+        [ordered]@{}
+    }
+
+    if ($null -eq $Value -or $Value -eq "") {
+        if ($settings.Contains($Key)) {
+            $settings.Remove($Key) | Out-Null
+            Write-Host "Unset $Key in $path" -ForegroundColor Yellow
+        }
+    }
+    else {
+        $settings[$Key] = $Value
+        Write-Host "Set $Key = $Value in $path" -ForegroundColor Green
+    }
+
+    if ($settings.Count -eq 0 -and (Test-Path $path)) {
+        Remove-Item -Path $path -Force
+    }
+    else {
+        $json = $settings | ConvertTo-Json -Depth 8
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
+    }
+
+    Reload-LocalLLMConfig
 }
 
 $script:Cfg = Import-LocalLLMConfig
@@ -1639,12 +1725,66 @@ function Stop-NoThinkProxy {
     $script:NoThinkProxyProcess = $null
 }
 
+function Ensure-UnshackledInstalled {
+    # Confirms an Unshackled checkout exists at $script:Cfg.UnshackledRoot.
+    # If not, asks before cloning from $script:Cfg.UnshackledRepoUrl.
+    $root = $script:Cfg.UnshackledRoot
+
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw "UnshackledRoot is not set. Run: Set-LocalLLMSetting UnshackledRoot '<path>'"
+    }
+
+    $cliPath = Join-Path $root "src\entrypoints\cli.tsx"
+
+    if (Test-Path $cliPath) {
+        return
+    }
+
+    $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.UnshackledRepoUrl)) {
+        $script:Cfg.UnshackledRepoUrl
+    } else {
+        "https://github.com/David-c0degeek/unshackled"
+    }
+
+    Write-Host ""
+    Write-Host "Unshackled not found at $root" -ForegroundColor Yellow
+    Write-Host "  Source: $repoUrl" -ForegroundColor DarkGray
+    $answer = (Read-Host "Clone it now? [y/N]").Trim().ToLowerInvariant()
+
+    if ($answer -notin @("y", "yes")) {
+        throw "Unshackled is not installed at $root. Aborting. Override with: Set-LocalLLMSetting UnshackledRoot '<path>'"
+    }
+
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH; cannot clone Unshackled."
+    }
+
+    $parent = Split-Path -Parent $root
+
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        Ensure-Directory $parent
+    }
+
+    Write-Host "Cloning $repoUrl -> $root" -ForegroundColor Cyan
+    & git clone $repoUrl $root
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "git clone failed for $repoUrl"
+    }
+
+    if (-not (Test-Path $cliPath)) {
+        throw "Cloned but $cliPath is missing — wrong repo URL? Check Set-LocalLLMSetting UnshackledRepoUrl."
+    }
+}
+
 function Invoke-UnshackledCli {
     [CmdletBinding()]
     param(
         [Parameter(ValueFromRemainingArguments)]
         [string[]]$CliArgs
     )
+
+    Ensure-UnshackledInstalled
 
     $root = $script:Cfg.UnshackledRoot
 

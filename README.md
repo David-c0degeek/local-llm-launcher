@@ -38,6 +38,8 @@ From the repo root:
 
 After install, open a fresh PowerShell and run `init` to build Ollama aliases for the recommended models.
 
+If you plan to use `-Fc` (Unshackled) and don't already have a checkout, the first launch with that flag will offer to `git clone` the configured `UnshackledRepoUrl` (default: `https://github.com/David-c0degeek/unshackled`) into the configured `UnshackledRoot`. Decline the prompt to abort.
+
 ## Day-to-day usage
 
 One function per model, flag-based:
@@ -89,9 +91,24 @@ The repo mixes three styles intentionally:
 
 These names are user-visible (the deployed paths). Renaming them would break setups, so they stay.
 
+## Per-machine settings (`settings.json`)
+
+`llm-models.json` is the model **catalog** — committed, sharable. Per-machine paths and preferences belong in a sibling `settings.json` at `~/.local-llm/settings.json` (gitignored). It overlays top-level scalars from the catalog at load time, so you don't have to hand-edit `llm-models.json` to fix paths on a fresh machine.
+
+Use the helper instead of editing JSON:
+
+```powershell
+Set-LocalLLMSetting UnshackledRoot 'C:\repos\unshackled'
+Set-LocalLLMSetting Default q36plus
+Set-LocalLLMSetting KeepAlive '5m'
+Set-LocalLLMSetting UnshackledRoot $null   # remove an entry
+```
+
+The `Models` and `CommandAliases` keys are catalog-only and rejected by `Set-LocalLLMSetting`. Everything else is fair game.
+
 ## Per-workspace default model
 
-Drop a `.llm-default` file in any directory containing a single line — a model key, `ShortName`, or `Root`. `llmdefault` (and the enforcer wrapper) walks up from `$PWD` and uses the nearest match. Falls back to the global `Default` field in `llm-models.json`.
+Drop a `.llm-default` file in any directory containing a single line — a model key, `ShortName`, or `Root`. `llmdefault` (and the enforcer wrapper) walks up from `$PWD` and uses the nearest match. Falls back to settings → catalog `Default`.
 
 ```
 echo q36p > .llm-default          # this workspace prefers Qwen 3.6 Plus

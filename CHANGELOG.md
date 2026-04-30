@@ -2,6 +2,21 @@
 
 Past-tense record of shipped changes.
 
+## 2026-04-30 — Per-machine settings + auto-install Unshackled
+
+### Added
+
+- **`~/.local-llm/settings.json`** — per-machine overlay for the catalog. Top-level scalars (`UnshackledRoot`, `OllamaAppPath`, `Default`, `KeepAlive`, `RequireAdvertisedTools`, `NoThinkProxyPort`, `LocalModelTools`, `UnshackledRepoUrl`, etc.) load from `llm-models.json` first, then any matching keys in `settings.json` override. `Models` and `CommandAliases` are catalog-only and protected from override.
+- **`Set-LocalLLMSetting <Key> <Value>`** — writes to `settings.json` and reloads. Pass `$null`/`""` to remove a key. Refuses `Models`/`CommandAliases`.
+- **`UnshackledRepoUrl`** config field, defaulting to `https://github.com/David-c0degeek/unshackled`.
+- **`Ensure-UnshackledInstalled`** — called by `Invoke-UnshackledCli` before doing anything. If the configured `UnshackledRoot` doesn't contain `src/entrypoints/cli.tsx`, it prompts `Clone <url>? [y/N]` and runs `git clone` on confirmation. Aborts with a clear instruction otherwise.
+- `settings.json` added to `.gitignore` so per-machine config never lands in the repo.
+- `install.ps1` prints a tip pointing at `Set-LocalLLMSetting` for fresh-machine setup.
+
+### Why
+
+Cloning the public repo onto a different machine should not require editing `llm-models.json` to fix `UnshackledRoot` (and risking merge conflicts with future pulls). And `-Fc` should do the obvious thing on a fresh machine instead of failing because no Unshackled is around.
+
 ## 2026-04-30 — Unshackled rename
 
 The `free-code` fork was renamed to [Unshackled](https://github.com/David-c0degeek/unshackled). Propagated through this project:

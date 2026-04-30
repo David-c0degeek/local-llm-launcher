@@ -211,5 +211,11 @@ if ($Profile -or -not $installFiles) {
 Show-Diagnostics
 
 if (-not $DryRun) {
+    Write-Host ""
     Write-Host "Done. Open a fresh PowerShell and run 'init' to build Ollama aliases." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Per-machine settings (paths, defaults) belong in ~/.local-llm/settings.json." -ForegroundColor DarkGray
+    Write-Host "Use the helper instead of editing JSON:" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting UnshackledRoot 'C:\path\to\unshackled'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting Default q36plus" -ForegroundColor DarkGray
 }
