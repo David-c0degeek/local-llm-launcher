@@ -1896,6 +1896,15 @@ function Start-ClaudeWithOllamaModel {
         $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
         $env:DISABLE_PROMPT_CACHING = "1"
 
+        # Local models prefill slowly on big prompts; raise SDK timeout so the
+        # client doesn't abort + retry mid-prefill (which restarts the work).
+        $env:API_TIMEOUT_MS = "1800000"
+
+        # Drop the auto-memory system-prompt block (and the turn-end extract
+        # agent). Saves several KB of input tokens per turn — significant when
+        # prefill is the bottleneck.
+        $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
+
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
         $thinkingLabel = if ($keepThinking) { "kept (direct to Ollama)" } else { "disabled" }
