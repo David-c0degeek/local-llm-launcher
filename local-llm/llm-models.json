@@ -15,6 +15,7 @@
       "Root": "devstral",
       "SourceType": "remote",
       "RemoteModel": "devstral-small-2:latest",
+      "Description": "Mistral's 24B dense coder. Smaller / faster than the Qwen MoEs; broad MCP tool access (LimitTools=false). Good when you want speed over depth.",
       "ParserNote": "Parser=none is intentional: devstral-small-2's GGUF template self-declares persona, [SYSTEM_PROMPT]/[TOOL_CALLS] tags, and capabilities=[completion,vision,tools]. Adding our own renderer would double-template.",
       "Parser": "none",
       "LimitTools": false,
@@ -23,6 +24,11 @@
         "": 65536,
         "fast": 32768,
         "deep": 65536
+      },
+      "ContextNotes": {
+        "": "64k · default. Comfortable on a 4090.",
+        "fast": "32k · lowest latency.",
+        "deep": "64k · same as default; kept for menu symmetry."
       }
     },
     "qcoder30": {
@@ -31,19 +37,83 @@
       "Root": "qcoder30",
       "SourceType": "gguf",
       "Repo": "mradermacher/Qwen3-Coder-30B-A3B-Instruct-Heretic-i1-GGUF",
+      "Description": "Qwen3-Coder MoE (30B total / 3B active, 48L, 4 KV heads). Heretic-abliterated for refusal removal. Native 256k context. The 256k-on-a-4090 pick when paired with iq4xs and -Q8 OFF.",
       "Quants": {
+        "iq4xs": "Qwen3-Coder-30B-A3B-Instruct-Heretic.i1-IQ4_XS.gguf",
         "q4": "Qwen3-Coder-30B-A3B-Instruct-Heretic.i1-Q4_K_M.gguf",
         "q6": "Qwen3-Coder-30B-A3B-Instruct-Heretic.i1-Q6_K.gguf"
       },
       "Quant": "q4",
       "QuantShortcut": "qcoder30",
+      "QuantSizesGB": {
+        "iq4xs": 16.5,
+        "q4": 18.7,
+        "q6": 25.2
+      },
+      "QuantNotes": {
+        "iq4xs": "IQ4_XS · use this for -Ctx 256. Slight quality dip vs q4 but leaves the most headroom for KV cache.",
+        "q4": "Q4_K_M · sweet spot for 32k–128k context on 24 GB. Default daily driver.",
+        "q6": "Q6_K · highest quality. Big enough that long-context KV stops fitting on a 24 GB card."
+      },
       "Parser": "qwen3coder",
       "LimitTools": true,
       "Tier": "recommended",
       "Contexts": {
         "": 65536,
         "fast": 32768,
-        "deep": 65536
+        "deep": 65536,
+        "128": 131072,
+        "256": 262144
+      },
+      "ContextNotes": {
+        "": "64k · default. Q4_K_M + q8 KV fits.",
+        "fast": "32k · low VRAM, fast tool loops.",
+        "deep": "64k · same as default; kept for menu symmetry.",
+        "128": "131k tokens · prefer iq4xs; -Q8 still fits but tight.",
+        "256": "262k tokens · REQUIRES -Quant iq4xs and -Q8 OFF (q8 KV @256k ≈ 12 GB → OOM on a 4090). Default q4_0 KV ≈ 6 GB."
+      }
+    },
+    "qcodernext": {
+      "DisplayName": "Qwen3-Coder-Next 80B-A3B Abliterated [tight on 4090]",
+      "ShortName": "qnext",
+      "Root": "qcodernext",
+      "SourceType": "gguf",
+      "Repo": "mradermacher/Huihui-Qwen3-Coder-Next-abliterated-i1-GGUF",
+      "Description": "Next-gen Qwen coder: 80B total / 3B active, hybrid Gated DeltaNet + Attention (2 KV heads), native 256k context. Only IQ1_M fits a single 4090 — quality is noticeably below qcoder30. Treat as experimental.",
+      "Quants": {
+        "iq1m": "Huihui-Qwen3-Coder-Next-abliterated.i1-IQ1_M.gguf",
+        "iq2s": "Huihui-Qwen3-Coder-Next-abliterated.i1-IQ2_S.gguf",
+        "iq3xxs": "Huihui-Qwen3-Coder-Next-abliterated.i1-IQ3_XXS.gguf"
+      },
+      "Quant": "iq1m",
+      "QuantShortcut": "qcodernext",
+      "QuantSizesGB": {
+        "iq1m": 18.1,
+        "iq2s": 23.7,
+        "iq3xxs": 30.9
+      },
+      "QuantNotes": {
+        "iq1m": "IQ1_M · the only quant that fits a 24 GB card with any KV headroom. Quality is the lowest tier — mradermacher labels IQ1 'for the desperate'.",
+        "iq2s": "IQ2_S · fills 24 GB; leaves no room for KV unless you partial-offload.",
+        "iq3xxs": "IQ3_XXS · partial offload territory on anything under ~36 GB. Expect single-digit tok/s."
+      },
+      "Parser": "qwen3coder",
+      "ParserNote": "Parser=qwen3coder is a guess. Qwen3-Coder-Next has a new hybrid DeltaNet+Attention architecture that may need llama.cpp/Ollama support to land before this runs at all. Verify with -Chat first.",
+      "LimitTools": true,
+      "Tier": "experimental",
+      "Contexts": {
+        "": 32768,
+        "fast": 16384,
+        "deep": 65536,
+        "128": 131072,
+        "256": 262144
+      },
+      "ContextNotes": {
+        "": "32k · default. Conservative; raise once you've confirmed this even loads.",
+        "fast": "16k · for quick smoke tests.",
+        "deep": "64k · still tight at IQ1_M.",
+        "128": "131k tokens · partial offload likely.",
+        "256": "262k native context. Theoretically supported, practically: expect heavy CPU offload of KV. -Q8 forbidden."
       }
     },
     "q36": {
@@ -51,6 +121,7 @@
       "Root": "q36",
       "SourceType": "remote",
       "RemoteModel": "qwen3.6:35b-a3b-q4_K_M",
+      "Description": "Stock Qwen 3.6 35B-A3B (no abliteration). Pulled from the Ollama registry with its own template — known-good baseline for comparing the uncensored variants.",
       "ParserNote": "Parser=none is intentional: the official qwen3.6:35b-a3b-q4_K_M registry pull ships with its own template and tool-call config. Adding our own renderer would double-template.",
       "Parser": "none",
       "LimitTools": true,
@@ -59,6 +130,11 @@
         "": 65536,
         "fast": 32768,
         "deep": 65536
+      },
+      "ContextNotes": {
+        "": "64k · default.",
+        "fast": "32k · lower VRAM.",
+        "deep": "64k · same as default."
       }
     },
     "q36hauhau": {
@@ -67,6 +143,7 @@
       "SourceType": "gguf",
       "Repo": "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive",
       "File": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_NL.gguf",
+      "Description": "HauhauCS 'Aggressive' uncensored finetune of Qwen 3.6 35B-A3B. Single IQ4_NL build — no quant switching. More refusal-removed than the 'Balanced' sibling.",
       "Parser": "qwen36",
       "LimitTools": true,
       "Tier": "experimental",
@@ -74,6 +151,11 @@
         "": 65536,
         "fast": 32768,
         "deep": 65536
+      },
+      "ContextNotes": {
+        "": "64k · default at IQ4_NL.",
+        "fast": "32k · low VRAM.",
+        "deep": "64k · same as default."
       }
     },
     "q36plus": {
@@ -82,6 +164,7 @@
       "Root": "q36plus",
       "SourceType": "gguf",
       "Repo": "LuffyTheFox/Qwen3.6-35B-A3B-Plus-Uncensored-Wasserstein-GGUF",
+      "Description": "Qwen 3.6 35B-A3B 'Plus' Wasserstein-merge uncensored. Widest quant selection in the catalog — daily driver for general agent work that isn't strictly coding.",
       "Quants": {
         "iq2m": "Qwen3.6-35B-A3B-Plus-Uncensored-IQ2_M.gguf",
         "iq4xs": "Qwen3.6-35B-A3B-Plus-Uncensored-IQ4_XS.gguf",
@@ -93,6 +176,24 @@
       },
       "Quant": "iq4nl",
       "QuantShortcut": "q36p",
+      "QuantSizesGB": {
+        "iq2m": 12,
+        "iq4xs": 17.7,
+        "iq4nl": 18,
+        "mxfp4": 19,
+        "q4kp": 20,
+        "q6kp": 28,
+        "q8": 36
+      },
+      "QuantNotes": {
+        "iq2m": "IQ2_M · tiny; rough quality, mainly for very long-context experiments.",
+        "iq4xs": "IQ4_XS · best 128k headroom in this model.",
+        "iq4nl": "IQ4_NL · current default. Balanced quality/size.",
+        "mxfp4": "MXFP4_MOE · MoE-aware 4-bit, similar to iq4nl.",
+        "q4kp": "Q4_K_P · slightly higher quality than iq4nl.",
+        "q6kp": "Q6_K_P · noticeable quality bump; long-context KV gets tight.",
+        "q8": "Q8_0 · highest quality; expect partial offload at any real context."
+      },
       "Parser": "qwen36",
       "LimitTools": true,
       "Tier": "recommended",
@@ -101,6 +202,12 @@
         "fast": 32768,
         "deep": 65536,
         "128": 131072
+      },
+      "ContextNotes": {
+        "": "64k · default.",
+        "fast": "32k · low VRAM, fast.",
+        "deep": "64k · same as default.",
+        "128": "131k tokens · prefer iq4xs/iq4nl; avoid -Q8 above ~96k."
       }
     },
     "q36heretic": {
@@ -108,6 +215,7 @@
       "Root": "q36h",
       "SourceType": "gguf",
       "Repo": "Youssofal/Qwen3.6-35B-A3B-Abliterated-Heretic-GGUF",
+      "Description": "Qwen 3.6 35B-A3B with the 'Heretic' refusal-removal pipeline applied. Same family as q36plus but a different abliteration recipe.",
       "Quants": {
         "q4": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M/Qwen3.6-35B-A3B-Abliterated-Heretic-Q4_K_M.gguf",
         "q6": "Qwen3.6-35B-A3B-Abliterated-Heretic-Q6_K/Qwen3.6-35B-A3B-Abliterated-Heretic-Q6_K.gguf",
@@ -115,6 +223,16 @@
       },
       "Quant": "q4",
       "QuantShortcut": "q36h",
+      "QuantSizesGB": {
+        "q4": 21,
+        "q6": 28,
+        "q8": 36
+      },
+      "QuantNotes": {
+        "q4": "Q4_K_M · default. Tight on 24 GB at long context.",
+        "q6": "Q6_K · noticeable quality bump; expect partial offload on 24 GB.",
+        "q8": "Q8_0 · highest quality; partial offload almost everywhere."
+      },
       "Parser": "qwen36",
       "LimitTools": true,
       "Tier": "experimental",
@@ -123,6 +241,12 @@
         "fast": 32768,
         "deep": 65536,
         "128": 131072
+      },
+      "ContextNotes": {
+        "": "64k · default.",
+        "fast": "32k · low VRAM.",
+        "deep": "64k · same as default.",
+        "128": "131k tokens · q4 only; no -Q8."
       }
     },
     "q27heretic": {
@@ -131,6 +255,7 @@
       "Root": "q27h",
       "SourceType": "gguf",
       "Repo": "Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF",
+      "Description": "Qwen 3.6 27B dense + Heretic abliteration. Smaller / faster than the 35B-A3B variants; runs comfortably on a 4090 at higher quants.",
       "Quants": {
         "q4": "Qwen3.6-27B-Abliterated-Heretic-Uncensored-Q4_K_M.gguf",
         "q5": "Qwen3.6-27B-Abliterated-Heretic-Uncensored-Q5_K_M.gguf",
@@ -139,6 +264,18 @@
       },
       "Quant": "q4",
       "QuantShortcut": "q27h",
+      "QuantSizesGB": {
+        "q4": 16.6,
+        "q5": 19.6,
+        "q6": 22.7,
+        "q8": 29
+      },
+      "QuantNotes": {
+        "q4": "Q4_K_M · default. Plenty of headroom for long-context KV.",
+        "q5": "Q5_K_M · noticeable quality bump.",
+        "q6": "Q6_K · top quality; long-context KV gets tight on 24 GB.",
+        "q8": "Q8_0 · partial offload on most consumer cards."
+      },
       "Parser": "qwen36",
       "LimitTools": true,
       "Tier": "experimental",
@@ -147,6 +284,12 @@
         "fast": 32768,
         "deep": 65536,
         "128": 131072
+      },
+      "ContextNotes": {
+        "": "64k · default.",
+        "fast": "32k · low VRAM.",
+        "deep": "64k · same as default.",
+        "128": "131k tokens · q4/q5 fit; avoid -Q8 here."
       }
     },
     "q27hauhau": {
@@ -154,12 +297,21 @@
       "Root": "q27hau",
       "SourceType": "gguf",
       "Repo": "HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced",
+      "Description": "Qwen 3.6 27B dense, HauhauCS 'Balanced' uncensored finetune. Less aggressive de-aligner than the 'Aggressive' sibling — keeps more general-knowledge accuracy.",
       "Quants": {
         "q4kp": "Qwen3.6-27B-Uncensored-HauhauCS-Balanced-Q4_K_P.gguf",
         "iq4xs": "Qwen3.6-27B-Uncensored-HauhauCS-Balanced-IQ4_XS.gguf"
       },
       "Quant": "q4kp",
       "QuantShortcut": "q27hau",
+      "QuantSizesGB": {
+        "q4kp": 16,
+        "iq4xs": 14
+      },
+      "QuantNotes": {
+        "q4kp": "Q4_K_P · default.",
+        "iq4xs": "IQ4_XS · cheaper, slightly lower quality."
+      },
       "Parser": "qwen36",
       "LimitTools": true,
       "Tier": "recommended",
@@ -168,6 +320,12 @@
         "fast": 32768,
         "deep": 65536,
         "128": 131072
+      },
+      "ContextNotes": {
+        "": "64k · default.",
+        "fast": "32k · low VRAM.",
+        "deep": "64k · same as default.",
+        "128": "131k tokens · fits both quants."
       }
     },
     "q36opus47abl": {
@@ -177,6 +335,7 @@
       "SourceType": "gguf",
       "Repo": "bkerler/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-gguf",
       "File": "Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-Q4_K_M.gguf",
+      "Description": "Huihui's 'Claude 4.7 Opus-style' abliterated Qwen 3.6 35B. Thinking-trained: ThinkingPolicy=keep routes it directly at Ollama (port 11434), bypassing the no-think proxy.",
       "Parser": "qwen36-think",
       "ThinkingPolicy": "keep",
       "LimitTools": true,
@@ -184,6 +343,10 @@
       "Contexts": {
         "fast": 8192,
         "": 32768
+      },
+      "ContextNotes": {
+        "": "32k · default. Thinking traces cost extra tokens.",
+        "fast": "8k · short interactive sessions only."
       }
     }
   },

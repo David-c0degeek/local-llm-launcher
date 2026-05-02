@@ -578,6 +578,200 @@ function Resolve-ModelQuantKey {
     throw "Unknown quant '$Quant'. Available: $available"
 }
 
+# -------------------------
+# Description / note helpers
+# Optional fields on a model def: Description, QuantNotes (qkey -> string),
+# ContextNotes (ctxkey -> string). Always read through these helpers — they
+# tolerate missing fields and odd casing.
+# -------------------------
+
+function Get-ModelDescription {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
+
+    if ($Def.Contains("Description") -and -not [string]::IsNullOrWhiteSpace($Def.Description)) {
+        return [string]$Def.Description
+    }
+
+    return ""
+}
+
+function Get-ModelQuantNote {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$QuantKey
+    )
+
+    if (-not $Def.Contains("QuantNotes") -or -not $Def.QuantNotes) { return "" }
+    if ([string]::IsNullOrEmpty($QuantKey)) { return "" }
+
+    foreach ($k in $Def.QuantNotes.Keys) {
+        if ($k -ieq $QuantKey) { return [string]$Def.QuantNotes[$k] }
+    }
+
+    return ""
+}
+
+function Get-ModelContextNote {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey
+    )
+
+    if (-not $Def.Contains("ContextNotes") -or -not $Def.ContextNotes) { return "" }
+
+    # Empty string is a valid key (the "default" context). Match it literally first.
+    foreach ($k in $Def.ContextNotes.Keys) {
+        if ($k -eq $ContextKey) { return [string]$Def.ContextNotes[$k] }
+    }
+
+    foreach ($k in $Def.ContextNotes.Keys) {
+        if ($k -ieq $ContextKey) { return [string]$Def.ContextNotes[$k] }
+    }
+
+    return ""
+}
+
+$script:LocalLLMVRAMCache = $null
+
+function Get-AutoDetectVRAMGB {
+    # Returns the largest GPU's VRAM in GB via nvidia-smi, or $null if nvidia-smi
+    # isn't on PATH / fails. Multi-GPU: takes the max (Ollama loads to one card).
+    try {
+        $cmd = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+        if (-not $cmd) { return $null }
+
+        $output = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null
+
+        if ($LASTEXITCODE -ne 0 -or -not $output) { return $null }
+
+        $values = @()
+        foreach ($line in @($output)) {
+            $trimmed = $line.Trim()
+            if ($trimmed -match '^\d+$') { $values += [int]$trimmed }
+        }
+
+        if ($values.Count -eq 0) { return $null }
+
+        $maxMb = ($values | Measure-Object -Maximum).Maximum
+
+        if ($maxMb -le 0) { return $null }
+
+        return [int][math]::Round($maxMb / 1024)
+    } catch {
+        return $null
+    }
+}
+
+function Get-LocalLLMVRAMInfo {
+    # Resolve VRAM in three steps:
+    #   1. user-configured via settings.json / catalog (Source = "configured")
+    #   2. nvidia-smi auto-detect, cached for the session (Source = "auto")
+    #   3. fallback to 24 (Source = "fallback")
+    if ($script:Cfg -and $script:Cfg.Contains("VRAMGB")) {
+        try {
+            $val = [int]$script:Cfg.VRAMGB
+            if ($val -gt 0) {
+                return @{ GB = $val; Source = "configured" }
+            }
+        } catch { }
+    }
+
+    if ($null -eq $script:LocalLLMVRAMCache) {
+        $auto = Get-AutoDetectVRAMGB
+        if ($auto) {
+            $script:LocalLLMVRAMCache = @{ GB = $auto; Source = "auto" }
+        } else {
+            $script:LocalLLMVRAMCache = @{ GB = 24; Source = "fallback" }
+        }
+    }
+
+    return $script:LocalLLMVRAMCache
+}
+
+function Get-LocalLLMVRAMGB {
+    return (Get-LocalLLMVRAMInfo).GB
+}
+
+function Get-Q8KvMaxContext {
+    # Largest num_ctx safe to combine with -Q8 (q8_0 KV cache).
+    # Override explicitly via settings.json: Set-LocalLLMSetting Q8KvMaxContext 262144
+    # Default scales with VRAM: each GB above ~16 GB is worth ~16k extra q8 tokens
+    # (rough heuristic across the catalog's MoE coders). Floors at 64k.
+    if ($script:Cfg -and $script:Cfg.Contains("Q8KvMaxContext")) {
+        try { return [int]$script:Cfg.Q8KvMaxContext } catch { }
+    }
+
+    $vramGB = Get-LocalLLMVRAMGB
+    $derived = ($vramGB - 16) * 16384
+
+    if ($derived -lt 65536) { return 65536 }
+
+    return [int]$derived
+}
+
+function Get-QuantSizeGB {
+    # Per-quant numeric size (GB) from the optional QuantSizesGB hashtable on a
+    # model def. Returns $null when the catalog hasn't filled it in.
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$QuantKey
+    )
+
+    if (-not $Def.Contains("QuantSizesGB") -or -not $Def.QuantSizesGB) { return $null }
+    if ([string]::IsNullOrEmpty($QuantKey)) { return $null }
+
+    foreach ($k in $Def.QuantSizesGB.Keys) {
+        if ($k -ieq $QuantKey) {
+            try { return [double]$Def.QuantSizesGB[$k] } catch { return $null }
+        }
+    }
+
+    return $null
+}
+
+function Get-QuantFitClass {
+    # Classify a quant against the host's VRAM budget:
+    #   "fits"  — leaves >= 7 GB headroom for KV cache + overhead
+    #   "tight" — fits weights but only ~2 GB headroom; fine at short context
+    #   "over"  — won't fit fully on one GPU; expect partial offload
+    #   ""      — size unknown (no QuantSizesGB entry)
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$QuantKey
+    )
+
+    $size = Get-QuantSizeGB -Def $Def -QuantKey $QuantKey
+    if ($null -eq $size) { return "" }
+
+    $vramGB = Get-LocalLLMVRAMGB
+
+    if ($size -le ($vramGB - 7)) { return "fits" }
+    if ($size -le ($vramGB - 2)) { return "tight" }
+    return "over"
+}
+
+function Format-QuantFitBadge {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$FitClass)
+
+    switch ($FitClass) {
+        "fits"  { return "[fits]" }
+        "tight" { return "[tight]" }
+        "over"  { return "[over]" }
+        default { return "" }
+    }
+}
+
+function Get-QuantFitBadgeColor {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$FitClass)
+
+    switch ($FitClass) {
+        "fits"  { return "Green" }
+        "tight" { return "Yellow" }
+        "over"  { return "Red" }
+        default { return "DarkGray" }
+    }
+}
+
 function Get-ModelGgufPath {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -1221,9 +1415,12 @@ function Add-LocalLLMModel {
         [string]$DefaultQuant,
         [ValidateSet('auto', 'none', 'qwen3coder', 'qwen36', 'qwen36-think')][string]$Parser = 'auto',
         [string]$DisplayName,
+        [string]$Description,
         [string]$Root,
         [string]$QuantShortcut,
         [System.Collections.IDictionary]$Contexts,
+        [System.Collections.IDictionary]$QuantNotes,
+        [System.Collections.IDictionary]$ContextNotes,
         [bool]$LimitTools = $true,
         [ValidateSet('recommended', 'experimental', 'legacy')][string]$Tier = 'experimental',
         [switch]$Force
@@ -1345,6 +1542,18 @@ function Add-LocalLLMModel {
         Contexts    = $Contexts
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($Description)) {
+        $entry.Description = $Description
+    }
+
+    if ($QuantNotes -and $QuantNotes.Count -gt 0) {
+        $entry.QuantNotes = $QuantNotes
+    }
+
+    if ($ContextNotes -and $ContextNotes.Count -gt 0) {
+        $entry.ContextNotes = $ContextNotes
+    }
+
     # QuantShortcut is deprecated — only kept for legacy-cleanup paths. Set
     # explicitly via -QuantShortcut if you need it; not auto-defaulted.
     if (-not [string]::IsNullOrWhiteSpace($QuantShortcut)) {
@@ -1362,6 +1571,9 @@ function Add-LocalLLMModel {
     Write-Host ""
     Write-Host "Added '$Key' to $script:LocalLLMConfigPath" -ForegroundColor Green
     Write-Host "  Display  : $DisplayName" -ForegroundColor DarkGray
+    if (-not [string]::IsNullOrWhiteSpace($Description)) {
+        Write-Host "  About    : $Description" -ForegroundColor DarkGray
+    }
     Write-Host "  Repo     : $repo" -ForegroundColor DarkGray
     Write-Host "  Parser   : $Parser" -ForegroundColor DarkGray
     Write-Host "  Quants   : $(@($shortToFile.Keys) -join ', ')  (default: $DefaultQuant)" -ForegroundColor DarkGray
@@ -1386,8 +1598,11 @@ function addllm {
         [string]$DefaultQuant,
         [string]$Parser = 'auto',
         [string]$DisplayName,
+        [string]$Description,
         [string]$Root,
         [string]$QuantShortcut,
+        [System.Collections.IDictionary]$QuantNotes,
+        [System.Collections.IDictionary]$ContextNotes,
         [bool]$LimitTools = $true,
         [string]$Tier = 'experimental',
         [switch]$Force
@@ -2290,6 +2505,19 @@ function Show-ModelCatalog {
 
     Write-Section "Commands"
 
+    $vramInfo = Get-LocalLLMVRAMInfo
+    $sourceLabel = switch ($vramInfo.Source) {
+        "configured" { "set in settings.json" }
+        "auto"       { "nvidia-smi auto-detect" }
+        "fallback"   { "fallback — nvidia-smi unavailable" }
+        default      { $vramInfo.Source }
+    }
+    Write-Host ("VRAM   : {0} GB ({1})" -f $vramInfo.GB, $sourceLabel) -ForegroundColor Yellow
+    if ($vramInfo.Source -ne "configured") {
+        Write-Host "         Override: Set-LocalLLMSetting VRAMGB <value>" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+
     $visibleKeys = @(Get-FilteredModelKeys -IncludeAll:$All)
     $installed = @(Get-OllamaInstalledModelNames)
 
@@ -2314,6 +2542,11 @@ function Show-ModelCatalog {
         Write-Host "$($def.DisplayName) " -ForegroundColor White -NoNewline
         Write-Host $tierBadge -ForegroundColor DarkYellow
 
+        $description = Get-ModelDescription -Def $def
+        if (-not [string]::IsNullOrWhiteSpace($description)) {
+            Write-Host "  $description" -ForegroundColor Gray
+        }
+
         $usage = "$cmdName $ctxFlag [-Fc] [-Chat] [-Q8]".Trim()
 
         if ($def.ContainsKey("Quants")) {
@@ -2326,6 +2559,59 @@ function Show-ModelCatalog {
 
         if ($def.Contains("Tools") -and -not [string]::IsNullOrWhiteSpace($def.Tools)) {
             Write-Host "  Tools  : $($def.Tools)" -ForegroundColor DarkGray
+        }
+
+        if ($def.ContainsKey("Quants")) {
+            $hasQuantNotes = $false
+            foreach ($qk in $def.Quants.Keys) {
+                if (-not [string]::IsNullOrWhiteSpace((Get-ModelQuantNote -Def $def -QuantKey $qk))) {
+                    $hasQuantNotes = $true
+                    break
+                }
+            }
+
+            if ($hasQuantNotes) {
+                Write-Host "  Quants :" -ForegroundColor DarkGray
+                foreach ($qk in $def.Quants.Keys) {
+                    $marker = if ($qk -eq $def.Quant) { "*" } else { " " }
+                    $note = Get-ModelQuantNote -Def $def -QuantKey $qk
+                    $fitClass = Get-QuantFitClass -Def $def -QuantKey $qk
+                    $badge = Format-QuantFitBadge -FitClass $fitClass
+
+                    $body = if ([string]::IsNullOrWhiteSpace($note)) { $def.Quants[$qk] } else { $note }
+                    $prefix = "    {0} {1,-8} " -f $marker, $qk
+
+                    if ([string]::IsNullOrWhiteSpace($badge)) {
+                        Write-Host ("$prefix $body") -ForegroundColor DarkGray
+                    } else {
+                        Write-Host -NoNewline $prefix -ForegroundColor DarkGray
+                        Write-Host -NoNewline (" {0,-7}" -f $badge) -ForegroundColor (Get-QuantFitBadgeColor -FitClass $fitClass)
+                        Write-Host (" $body") -ForegroundColor DarkGray
+                    }
+                }
+            }
+        }
+
+        $hasCtxNotes = $false
+        foreach ($ck in $contextKeys) {
+            if (-not [string]::IsNullOrWhiteSpace((Get-ModelContextNote -Def $def -ContextKey $ck))) {
+                $hasCtxNotes = $true
+                break
+            }
+        }
+
+        if ($hasCtxNotes) {
+            Write-Host "  Ctx    :" -ForegroundColor DarkGray
+            foreach ($ck in $contextKeys) {
+                $label = if ([string]::IsNullOrWhiteSpace($ck)) { "default" } else { $ck }
+                $note = Get-ModelContextNote -Def $def -ContextKey $ck
+                if ([string]::IsNullOrWhiteSpace($note)) {
+                    $tokens = Get-ModelContextValue -Def $def -ContextKey $ck
+                    Write-Host ("    {0,-8}  {1} tokens" -f $label, $tokens) -ForegroundColor DarkGray
+                } else {
+                    Write-Host ("    {0,-8}  {1}" -f $label, $note) -ForegroundColor DarkGray
+                }
+            }
         }
 
         Write-Host ""
@@ -2341,6 +2627,7 @@ function Show-ModelCatalog {
     }
 
     Write-Host "Built-status legend: +name = Ollama alias exists, -name = not yet built" -ForegroundColor DarkGray
+    Write-Host "Quant-fit legend:    [fits] weights + ~7 GB headroom for KV  [tight] weights only  [over] partial offload" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "Manage:" -ForegroundColor White
     Write-Host "  addllm <hf-url> -Key <key>     Add a model from HuggingFace" -ForegroundColor DarkGray
@@ -2547,6 +2834,20 @@ function Invoke-ModelShortcut {
     )
 
     $def = Get-ModelDef -Key $Key
+
+    if ($UseQ8) {
+        $numCtx = Get-ModelContextValue -Def $def -ContextKey $ContextKey
+        $maxQ8 = Get-Q8KvMaxContext
+
+        if ($numCtx -gt $maxQ8) {
+            $ctxLabel = if ([string]::IsNullOrWhiteSpace($ContextKey)) { "default" } else { $ContextKey }
+            $vramInfo = Get-LocalLLMVRAMInfo
+            throw ("Refusing -Q8 with -Ctx $ctxLabel ($numCtx tokens). " +
+                   "q8_0 KV cache at this length exceeds the ceiling for this host ($($vramInfo.GB) GB VRAM, $($vramInfo.Source); Q8KvMaxContext=$maxQ8). " +
+                   "Drop -Q8 (q4_0 KV is the default), pick a smaller -Ctx, or raise the ceiling: Set-LocalLLMSetting Q8KvMaxContext <tokens>")
+        }
+    }
+
     $modelName = Ensure-ModelAlias -Key $Key -ContextKey $ContextKey
 
     if ($Chat) {
@@ -2778,11 +3079,18 @@ function Format-LLMContextLabel {
     $aliasName = Get-ModelAliasName -Def $Def -ContextKey $ContextKey
     $ctx = Get-ModelContextValue -Def $Def -ContextKey $ContextKey
 
-    if ([string]::IsNullOrWhiteSpace($ContextKey)) {
-        return "$aliasName  ($ctx tokens, default)"
+    $head = if ([string]::IsNullOrWhiteSpace($ContextKey)) {
+        "$aliasName  ($ctx tokens, default)"
+    } else {
+        "$aliasName  ($ctx tokens, $ContextKey)"
     }
 
-    return "$aliasName  ($ctx tokens, $ContextKey)"
+    $note = Get-ModelContextNote -Def $Def -ContextKey $ContextKey
+    if ([string]::IsNullOrWhiteSpace($note)) {
+        return $head
+    }
+
+    return "$head`n      $note"
 }
 
 function Read-LLMChoiceIndex {
@@ -2849,7 +3157,14 @@ function Select-LLMModelKey {
         $contexts = ($def.Contexts.Keys | ForEach-Object {
                 if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
             }) -join ", "
-        return "$key  ->  $($def.DisplayName)$quant | contexts: $contexts"
+        $head = "$key  ->  $($def.DisplayName)$quant | contexts: $contexts"
+
+        $description = Get-ModelDescription -Def $def
+        if ([string]::IsNullOrWhiteSpace($description)) {
+            return $head
+        }
+
+        return "$head`n      $description"
     }
 
     if ($idx -lt 0) {
@@ -2877,7 +3192,16 @@ function Select-LLMQuantKey {
         -Label {
         param($quantKey, $i)
         $current = if ($quantKey -eq $def.Quant) { "  [current]" } else { "" }
-        return "$quantKey  ->  $($def.Quants[$quantKey])$current"
+        $note = Get-ModelQuantNote -Def $def -QuantKey $quantKey
+        $badge = Format-QuantFitBadge -FitClass (Get-QuantFitClass -Def $def -QuantKey $quantKey)
+        $badgeStr = if ($badge) { " $badge" } else { "" }
+        $head = "$quantKey$badgeStr  ->  $($def.Quants[$quantKey])$current"
+
+        if ([string]::IsNullOrWhiteSpace($note)) {
+            return $head
+        }
+
+        return "$head`n      $note"
     }
 
     if ($idx -lt 0) {
@@ -3101,6 +3425,12 @@ function Show-LLMDynamicModelSummary {
 
             Write-Host "$key" -ForegroundColor White
             Write-Host "  Name     : $($def.DisplayName)"
+
+            $description = Get-ModelDescription -Def $def
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+                Write-Host "  About    : $description" -ForegroundColor Gray
+            }
+
             Write-Host "  Source   : $source"
             Write-Host "  Contexts : $contexts"
 
@@ -3121,12 +3451,16 @@ function Show-LLMDynamicModelSummary {
 function Show-LLMQuickReference {
     Write-Section "Quick Reference"
 
-    Write-Host @'
+    $q8Max = Get-Q8KvMaxContext
+    $q8MaxLabel = if ($q8Max -ge 1024) { "{0}k" -f [int]($q8Max / 1024) } else { "$q8Max" }
+
+    Write-Host @"
 One function per model — flags select what to do.
   qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, Unshackled)
   q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, Unshackled)
   dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
   q36p -Ctx 128 -Fc             Big context (Qwen 3.6 Plus, 128k)
+  qcoder -Ctx 256 -Quant iq4xs  256k coder context (4090 ceiling — no -Q8)
   q36p -Chat                    Raw ollama chat, no Claude Code
   q36p -Q8                      Use q8 KV cache for higher quality
   q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
@@ -3134,11 +3468,18 @@ One function per model — flags select what to do.
   llm                           Guided wizard
 
 Flags
-  -Ctx <name>     One of the model's contexts (e.g. fast, deep, 128). Omit for default.
+  -Ctx <name>     One of the model's contexts (e.g. fast, deep, 128, 256). Omit for default.
   -Fc             Use Unshackled instead of Claude Code (alias for -Unshackled).
   -Chat           Run plain ollama chat (skips Claude Code entirely).
   -Q8             Set OLLAMA_KV_CACHE_TYPE=q8_0 for this launch.
+                  Refused above $q8MaxLabel tokens — q8 KV at long context OOMs a 24GB card.
+                  Override the threshold with: Set-LocalLLMSetting Q8KvMaxContext 262144
   -Quant <name>   Switch the model's selected quant (no launch). GGUF models only.
+
+Tradeoffs / sizes
+  Per-quant and per-context tradeoffs (file size, KV pressure, when to pick what)
+  are shown inline by 'info' and the 'llm' wizard. Set them in llm-models.json
+  as Description, QuantNotes, and ContextNotes fields.
 
 Manage
   info                  Dashboard, recommended models only
@@ -3158,6 +3499,7 @@ Manage
 Add or remove a model
   addllm <hf-url-or-repo> -Key <key>
   addllm <hf-url-or-repo> -Key <key> -Quants Q4_K_P,IQ4_XS -DefaultQuant Q4_K_P -Tier recommended
+  addllm <hf-url-or-repo> -Key <key> -Description '...' -QuantNotes @{q4='~17 GB'} -ContextNotes @{'128'='131k'}
   initmodel <key>
   removellm <key> [-KeepFiles] [-Force]
 
@@ -3174,7 +3516,7 @@ Notes
   Thinking: q36opus47abl uses ThinkingPolicy=keep, which routes it directly at
             Ollama (port 11434) and leaves Claude Code's thinking env vars unset.
             All other models go through the strip proxy on 11435.
-'@
+"@
 
     Show-LLMDynamicModelSummary
 }

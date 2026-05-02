@@ -49,6 +49,7 @@ qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, Unshackled)
 q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, Unshackled)
 dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
 q36p -Ctx 128 -Fc             Big context (Qwen 3.6 Plus, 128k)
+qcoder -Ctx 256 -Quant iq4xs  256k coder context (4090 ceiling — no -Q8)
 q36p -Chat                    Raw ollama chat, no Claude Code
 q36p -Q8                      Use q8 KV cache for higher quality
 q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
@@ -58,11 +59,22 @@ llm                           Guided wizard
 
 | Flag | Effect |
 |------|--------|
-| `-Ctx <name>` | One of the model's context keys (e.g. `fast`, `deep`, `128`). Omit for default. |
+| `-Ctx <name>` | One of the model's context keys (e.g. `fast`, `deep`, `128`, `256`). Omit for default. |
 | `-Fc` (alias `-FreeCode`, canonical `-Unshackled`) | Use Unshackled instead of Claude Code. |
 | `-Chat` | Run plain `ollama run`, skip Claude Code entirely. |
-| `-Q8` | Set `OLLAMA_KV_CACHE_TYPE=q8_0` for this launch. |
+| `-Q8` | Set `OLLAMA_KV_CACHE_TYPE=q8_0` for this launch. Refused above the VRAM-derived `Q8KvMaxContext` ceiling (~128k on a 24 GB card) — q8 KV at long context will OOM. |
 | `-Quant <name>` | Switch the model's selected GGUF quant. No launch — rebuilds the alias. |
+
+### 256k context on a 24 GB card
+
+The combination of **Qwen3-Coder-30B-A3B Heretic** (4 KV heads, 48 layers) at the **IQ4_XS** quant with **q4_0 KV cache** is the only setup that fits a full 256k context on a single 4090:
+
+```powershell
+qcoder -Ctx 256 -Quant iq4xs        # Claude Code @ 256k
+qcoder -Ctx 256 -Quant iq4xs -Fc    # Unshackled @ 256k
+```
+
+Weights are ~16.5 GB; q4_0 KV @ 256k is ~6 GB; total ~23.6 GB. The launcher will **refuse `-Q8` at this context** because q8 KV would push KV cache to ~12 GB and OOM the card.
 
 Run `llmdocs` for the full quick reference, or `info` for the dashboard.
 
@@ -91,6 +103,35 @@ The repo mixes three styles intentionally:
 
 These names are user-visible (the deployed paths). Renaming them would break setups, so they stay.
 
+## VRAM-aware tradeoffs
+
+The launcher reads your GPU's VRAM and uses it to:
+
+1. **Tag every quant** with `[fits]` / `[tight]` / `[over]` in `info` and the `llm` wizard, so you can see at a glance which builds will load fully on your card.
+2. **Set the `Q8KvMaxContext` ceiling** — the largest `num_ctx` that pairs safely with `-Q8` (q8_0 KV cache). Roughly +16k tokens of headroom per GB above 16 GB; floors at 64k. The guard refuses launches that would exceed this and tells you what to drop.
+
+VRAM resolves in this order:
+
+1. `VRAMGB` set in `settings.json` or `llm-models.json` (top-level).
+2. `nvidia-smi --query-gpu=memory.total` auto-detect (largest GPU on a multi-GPU box).
+3. Fallback to 24.
+
+The `info` dashboard shows the resolved value and source (`auto` / `configured` / `fallback`).
+
+```powershell
+Set-LocalLLMSetting VRAMGB 32          # 5090
+Set-LocalLLMSetting VRAMGB 48          # RTX 6000 Ada / dual-card aggregate
+Set-LocalLLMSetting VRAMGB $null       # remove override, fall back to auto-detect
+Set-LocalLLMSetting Q8KvMaxContext 196608   # pin the q8 ceiling explicitly
+```
+
+Per-quant tradeoffs come from two optional catalog fields:
+
+- `QuantSizesGB` — file size per quant in GB (drives the fit badge).
+- `QuantNotes` — human-readable note per quant (quality/use-case context). Shown verbatim.
+
+Per-context guidance comes from `ContextNotes` in the same shape. Backfill these on any model you add — they show up inline in `info` and the wizard.
+
 ## Per-machine settings (`settings.json`)
 
 `llm-models.json` is the model **catalog** — committed, sharable. Per-machine paths and preferences belong in a sibling `settings.json` at `~/.local-llm/settings.json` (gitignored). It overlays top-level scalars from the catalog at load time, so you don't have to hand-edit `llm-models.json` to fix paths on a fresh machine.
@@ -101,6 +142,8 @@ Use the helper instead of editing JSON:
 Set-LocalLLMSetting UnshackledRoot 'C:\repos\unshackled'
 Set-LocalLLMSetting Default q36plus
 Set-LocalLLMSetting KeepAlive '5m'
+Set-LocalLLMSetting VRAMGB 32              # override auto-detect
+Set-LocalLLMSetting Q8KvMaxContext 196608  # pin the -Q8 ceiling
 Set-LocalLLMSetting UnshackledRoot $null   # remove an entry
 ```
 

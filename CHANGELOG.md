@@ -2,6 +2,29 @@
 
 Past-tense record of shipped changes.
 
+## 2026-05-02 — 256k Qwen3-Coder profile, VRAM-aware tradeoffs, per-quant/context notes
+
+### Added
+
+- **`qcoder30` 256k context.** Added `"256": 262144` to the Qwen3-Coder-30B-A3B Heretic model and a new `iq4xs` quant (`Qwen3-Coder-30B-A3B-Instruct-Heretic.i1-IQ4_XS.gguf`, ~16.5 GB). The 256k profile only fits a 4090 with IQ4_XS weights + q4_0 KV cache (~6 GB at 256k); use `qcoder -Ctx 256 -Quant iq4xs`.
+- **`qcodernext` (experimental).** New entry pointing at `mradermacher/Huihui-Qwen3-Coder-Next-abliterated-i1-GGUF` — the 80B/3B-active hybrid DeltaNet+Attention coder. Quants: `iq1m`, `iq2s`, `iq3xxs`. Only `iq1m` (~18.1 GB) fits a single 4090 with any KV headroom; flagged as experimental and "tight on 4090" in the display name.
+- **Per-model `Description`, `QuantNotes`, `ContextNotes` catalog fields.** Free-form strings keyed by quant/context name. Backfilled across the existing catalog so users can see file sizes, KV pressure, and "when to pick this" guidance without leaving the launcher.
+- **`info` / `llmdocs` / `llm` wizard surfaces.** `Show-ModelCatalog`, `Show-LLMDynamicModelSummary`, `Select-LLMModelKey`, `Select-LLMQuantKey`, and `Format-LLMContextLabel` all render the new notes inline. The current default quant is marked with `*` in the per-quant list.
+- **`addllm -Description`, `-QuantNotes`, `-ContextNotes`.** Optional params on `Add-LocalLLMModel` / `addllm` that round-trip into the catalog entry. Notes are hashtables (`@{key='note'}`) keyed by the same quant/context shortname.
+- **`-Q8` + long-context guard.** `Invoke-ModelShortcut` refuses `-UseQ8` whenever the resolved `num_ctx` exceeds the `Q8KvMaxContext` ceiling. The error message tells the user to drop `-Q8`, lower `-Ctx`, or raise the threshold.
+- **VRAM-aware recommendations.** New top-level `VRAMGB` setting plus `Get-LocalLLMVRAMInfo` helper. Auto-detects via `nvidia-smi --query-gpu=memory.total` (largest GPU on a multi-card box). Override via `Set-LocalLLMSetting VRAMGB 32`. The dashboard surfaces the resolved value + source (configured / auto / fallback).
+- **`QuantSizesGB` per-quant numeric field.** Drives a `[fits]` / `[tight]` / `[over]` badge next to each quant in `info` and the wizard, computed against the host's VRAM (weight-budget heuristic: `[fits]` when the model leaves >=7 GB headroom for KV, `[tight]` when only ~2 GB headroom, `[over]` otherwise). Backfilled across `qcoder30`, `qcodernext`, `q36plus`, `q36heretic`, `q27heretic`, `q27hauhau`.
+- **`Q8KvMaxContext` now scales with VRAM by default.** Removed the explicit `131072` literal from the catalog. The guard derives `(VRAMGB - 16) * 16384` (floored at 64k) when not pinned, so a 5090 (32 GB) gets ~256k while a 4090 (24 GB) gets ~128k. Override still works via `Set-LocalLLMSetting Q8KvMaxContext`.
+- **Quant notes rewritten to be VRAM-agnostic** where possible. The hand-written notes describe quality/use-case (no longer "partial offload on a 4090"); the per-quant `[fits]/[tight]/[over]` badge is the live verdict for the host's actual VRAM.
+
+### Why
+
+Picking a quant and context blindly was costing real time — Q4_K_M is fine at 64k but cannot fit 256k KV; Q6_K is too heavy at any long context; `-Q8` looks free until it OOMs at 128k+. The notes encode the tradeoff directly next to the selector, and the guard prevents the worst foot-gun (`-Q8 -Ctx 256`) from ever launching.
+
+VRAM auto-detection was the next cliff: every recommendation in the catalog implicitly assumed a 24 GB 4090. A 5090 user (32 GB) should see Q5_K_M as `[fits]`, not "partial offload"; a 4080 user (16 GB) should see most 35B variants flagged `[over]` and not waste time downloading them. The fit badge gives a per-host verdict without the user having to do KV-cache arithmetic.
+
+The catalog gained one realistic 256k coder option (`qcoder30 -Ctx 256 -Quant iq4xs`) and one aspirational one (`qcodernext`) so the "uncensored 256k on a 4090" question has a documented answer instead of trial-and-error.
+
 ## 2026-04-30 — Per-machine settings + auto-install Unshackled
 
 ### Added
