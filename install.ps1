@@ -181,6 +181,16 @@ function Show-Diagnostics {
         Write-Host "bun      : missing (only needed for Unshackled launches)" -ForegroundColor DarkGray
     }
 
+    $spectre = Get-Module -ListAvailable -Name PwshSpectreConsole -ErrorAction SilentlyContinue
+    if ($spectre) {
+        $ver = ($spectre | Sort-Object Version -Descending | Select-Object -First 1).Version
+        Write-Host "spectre  : ok  ($ver)  (rich 'info' dashboard)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "spectre  : missing — 'info' falls back to plain text. Install with:" -ForegroundColor DarkGray
+        Write-Host "             Install-Module PwshSpectreConsole -Scope CurrentUser" -ForegroundColor DarkGray
+    }
+
     Write-Host ""
 }
 

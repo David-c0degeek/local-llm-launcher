@@ -1316,17 +1316,240 @@ function Resolve-HuggingFaceRepo {
     return $value
 }
 
+function Get-HuggingFaceModelInfo {
+    # One round-trip to /api/models/{repo}?blobs=true. Returns the raw object
+    # (siblings carry `size` in bytes, plus cardData / tags / etc.).
+    param([Parameter(Mandatory = $true)][string]$Repo)
+
+    $url = "https://huggingface.co/api/models/$Repo`?blobs=true"
+    return Invoke-RestMethod -Uri $url -UseBasicParsing
+}
+
 function Get-HuggingFaceModelFiles {
     param([Parameter(Mandatory = $true)][string]$Repo)
 
-    $url = "https://huggingface.co/api/models/$Repo"
-    $response = Invoke-RestMethod -Uri $url -UseBasicParsing
+    $info = Get-HuggingFaceModelInfo -Repo $Repo
 
-    if (-not $response.siblings) {
+    if (-not $info.siblings) {
         return @()
     }
 
-    return @($response.siblings | ForEach-Object { $_.rfilename })
+    return @($info.siblings | ForEach-Object { $_.rfilename })
+}
+
+function Get-HuggingFaceFileSizesGB {
+    # Map of rfilename -> size in GB (1 decimal place). Pulled from siblings[*].size
+    # which is bytes when ?blobs=true is set on /api/models/{repo}.
+    param([Parameter(Mandatory = $true)]$Info)
+
+    $map = [ordered]@{}
+
+    if (-not $Info.siblings) { return $map }
+
+    foreach ($s in $Info.siblings) {
+        $name = $s.rfilename
+        if (-not $name) { continue }
+
+        $bytes = 0L
+        if ($s.PSObject.Properties.Match('lfs').Count -gt 0 -and $s.lfs -and $s.lfs.size) {
+            try { $bytes = [long]$s.lfs.size } catch { }
+        }
+        if ($bytes -le 0 -and $s.PSObject.Properties.Match('size').Count -gt 0 -and $s.size) {
+            try { $bytes = [long]$s.size } catch { }
+        }
+
+        if ($bytes -gt 0) {
+            # Decimal GB (1e9) to match existing catalog entries and HF's UI.
+            # Slightly larger than binary GiB but reads the same as HF README tables.
+            $map[$name] = [math]::Round($bytes / 1000000000, 1)
+        }
+    }
+
+    return $map
+}
+
+function Get-HuggingFaceReadme {
+    # Raw README.md for a repo. Returns $null on any failure (404, network, ...).
+    param([Parameter(Mandatory = $true)][string]$Repo)
+
+    $url = "https://huggingface.co/$Repo/raw/main/README.md"
+
+    try {
+        $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
+        return [string]$resp.Content
+    } catch {
+        return $null
+    }
+}
+
+function ConvertFrom-HuggingFaceReadme {
+    # Heuristic: pull the first prose paragraph out of a raw HF README.md.
+    # Strips frontmatter, HTML comments, headings, badge/image lines, blockquotes,
+    # bare URLs, "weighted/imatrix quants of <link>" boilerplate. Falls back to
+    # $null if nothing usable remains.
+    param([Parameter(Mandatory = $true)][AllowNull()][AllowEmptyString()][string]$Readme)
+
+    if ([string]::IsNullOrWhiteSpace($Readme)) { return $null }
+
+    $text = $Readme
+
+    # Drop YAML frontmatter (--- ... --- at the very top).
+    if ($text -match '^\s*---\r?\n') {
+        $idx = $text.IndexOf("`n---", 4)
+        if ($idx -ge 0) {
+            $text = $text.Substring($idx + 4)
+        }
+    }
+
+    # Strip HTML comments.
+    $text = [regex]::Replace($text, '<!--[\s\S]*?-->', '')
+
+    # Strip image lines and bare badge links on their own line.
+    $text = [regex]::Replace($text, '(?m)^\s*!\[[^\]]*\]\([^)]*\)\s*$', '')
+
+    $paragraphs = [regex]::Split($text, '\r?\n\s*\r?\n')
+
+    foreach ($p in $paragraphs) {
+        $candidate = $p.Trim()
+        if (-not $candidate) { continue }
+        # Skip headings, fenced code, tables, blockquotes, list-only blocks.
+        if ($candidate -match '^(#|```|>|\||---|\* |- |\d+\. )') { continue }
+        # Skip lines that are only badges / images / single links.
+        if ($candidate -match '^!\[' ) { continue }
+        if ($candidate -match '^\[!\[') { continue }
+        # Skip mradermacher boilerplate ("weighted/imatrix quants of ...").
+        if ($candidate -match '^(weighted/imatrix |static )?quants of\s+https?://') { continue }
+        if ($candidate -match '^For a convenient overview') { continue }
+        if ($candidate -match '^If you are unsure how to use GGUF') { continue }
+        # Need real prose: at least one sentence, not just a URL.
+        if ($candidate.Length -lt 30) { continue }
+        if ($candidate -match '^\s*https?://\S+\s*$') { continue }
+
+        # Collapse internal whitespace; cap at ~400 chars to keep dashboards readable.
+        $candidate = ($candidate -replace '\s+', ' ').Trim()
+
+        # Strip simple inline markdown links: [text](url) -> text
+        $candidate = [regex]::Replace($candidate, '\[([^\]]+)\]\([^)]+\)', '$1')
+        # Strip emphasis markers.
+        $candidate = $candidate -replace '\*{1,3}([^*]+)\*{1,3}', '$1'
+
+        if ($candidate.Length -gt 400) {
+            $cut = $candidate.Substring(0, 397)
+            $lastDot = $cut.LastIndexOf('. ')
+            if ($lastDot -gt 200) { $cut = $cut.Substring(0, $lastDot + 1) }
+            $candidate = $cut.TrimEnd() + ($(if ($candidate.Length -gt $cut.Length) { '...' } else { '' }))
+        }
+
+        return $candidate
+    }
+
+    return $null
+}
+
+function Resolve-HuggingFaceDescription {
+    # Try to find a usable Description for a repo:
+    #   1. cardData.description on this repo (rare for quant repos)
+    #   2. README.md of base_model if cardData.base_model is set (mradermacher pattern)
+    #   3. README.md of this repo
+    # Returns $null if nothing usable.
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [int]$Depth = 0
+    )
+
+    if ($Depth -gt 1) { return $null }
+
+    try {
+        $info = Get-HuggingFaceModelInfo -Repo $Repo
+    } catch {
+        return $null
+    }
+
+    if ($info.cardData -and $info.cardData.description) {
+        $cd = ([string]$info.cardData.description).Trim()
+        if ($cd -and $cd.Length -ge 30) { return $cd }
+    }
+
+    if ($Depth -eq 0 -and $info.cardData -and $info.cardData.base_model) {
+        $base = $info.cardData.base_model
+        if ($base -is [array]) { $base = $base[0] }
+        $base = [string]$base
+        if ($base -match '^[^/\s]+/[^/\s]+$' -and $base -ne $Repo) {
+            $fromBase = Resolve-HuggingFaceDescription -Repo $base -Depth ($Depth + 1)
+            if ($fromBase) { return $fromBase }
+        }
+    }
+
+    $readme = Get-HuggingFaceReadme -Repo $Repo
+    return (ConvertFrom-HuggingFaceReadme -Readme $readme)
+}
+
+# Quant code -> (family label, quality tier text). Hand-curated from the
+# llama.cpp / mradermacher quant table. Used by New-LocalLLMQuantNoteText to
+# generate baseline QuantNotes when the user doesn't supply their own.
+$script:LocalLLMQuantSemantics = @{
+    'IQ1_S'    = @('1-bit imatrix',          'for the desperate')
+    'IQ1_M'    = @('1-bit imatrix',          'mostly desperate')
+    'IQ2_XXS'  = @('2-bit imatrix',          'very low quality')
+    'IQ2_XS'   = @('2-bit imatrix',          'very low quality')
+    'IQ2_S'    = @('2-bit imatrix',          'low quality')
+    'IQ2_M'    = @('2-bit imatrix',          'low quality, long-context only')
+    'Q2_K_S'   = @('2-bit k-quant small',    'very low quality')
+    'Q2_K'     = @('2-bit k-quant',          'IQ3_XXS often better')
+    'IQ3_XXS'  = @('3-bit imatrix',          'lower quality')
+    'IQ3_XS'   = @('3-bit imatrix',          'lower quality')
+    'Q3_K_S'   = @('3-bit k-quant small',    'IQ3_XS often better')
+    'IQ3_S'    = @('3-bit imatrix',          'beats Q3_K*')
+    'IQ3_M'    = @('3-bit imatrix',          'good 3-bit baseline')
+    'Q3_K_M'   = @('3-bit k-quant medium',   'IQ3_S often better')
+    'Q3_K_L'   = @('3-bit k-quant large',    'IQ3_M often better')
+    'IQ4_XS'   = @('4-bit imatrix',          'good 4-bit, smallest 4-bit option')
+    'IQ4_NL'   = @('4-bit imatrix non-linear','good 4-bit baseline')
+    'Q4_0'     = @('4-bit legacy',           'fast, low quality')
+    'Q4_1'     = @('4-bit legacy',           '')
+    'Q4_K_S'   = @('4-bit k-quant small',    'optimal size/speed/quality')
+    'Q4_K_M'   = @('4-bit k-quant medium',   'fast, recommended sweet spot')
+    'Q4_K_P'   = @('4-bit k-quant',          'similar to Q4_K_M')
+    'MXFP4'    = @('4-bit MoE-aware',        'similar to IQ4_NL')
+    'MXFP4_MOE'= @('4-bit MoE-aware',        'similar to IQ4_NL')
+    'Q5_K_S'   = @('5-bit k-quant small',    'noticeable quality bump')
+    'Q5_K_M'   = @('5-bit k-quant medium',   'noticeable quality bump')
+    'Q6_K'     = @('6-bit k-quant',          'high quality')
+    'Q6_K_P'   = @('6-bit k-quant',          'high quality')
+    'Q8_0'     = @('8-bit',                  'highest practical quality')
+    'BF16'     = @('bfloat16 full precision','expect partial offload')
+    'F16'      = @('float16 full precision', 'expect partial offload')
+    'F32'      = @('float32 full precision', 'almost certainly partial offload')
+}
+
+function New-LocalLLMQuantNoteText {
+    # Generic baseline note for a quant when the user doesn't supply -QuantNotes.
+    # Format: "<CODE> · <family> · ~<size> GB · <tier note>"
+    # Any missing field is omitted. Returns "" if nothing useful is known.
+    param(
+        [Parameter(Mandatory = $true)][string]$QuantCode,
+        [AllowNull()][object]$SizeGB
+    )
+
+    $upper = $QuantCode.ToUpperInvariant()
+    $family = $null
+    $tier = $null
+
+    if ($script:LocalLLMQuantSemantics.ContainsKey($upper)) {
+        $entry = $script:LocalLLMQuantSemantics[$upper]
+        $family = $entry[0]
+        $tier = $entry[1]
+    }
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add($upper) | Out-Null
+    if ($family) { $parts.Add($family) | Out-Null }
+    if ($null -ne $SizeGB -and $SizeGB -gt 0) {
+        $parts.Add("~$([math]::Round([double]$SizeGB, 1)) GB") | Out-Null
+    }
+    if ($tier) { $parts.Add($tier) | Out-Null }
+
+    return ($parts -join ' · ')
 }
 
 function Get-HuggingFaceQuantCode {
@@ -1444,7 +1667,9 @@ function Add-LocalLLMModel {
     }
 
     Write-Host "Fetching file list from HuggingFace..." -ForegroundColor Cyan
-    $allFiles = @(Get-HuggingFaceModelFiles -Repo $repo)
+    $hfInfo = Get-HuggingFaceModelInfo -Repo $repo
+    $allFiles = @($hfInfo.siblings | ForEach-Object { $_.rfilename })
+    $sizesByFile = Get-HuggingFaceFileSizesGB -Info $hfInfo
     $ggufFiles = @(
         $allFiles | Where-Object {
             $_ -match '\.gguf$' -and $_ -notmatch '/' -and $_ -notmatch '^mmproj-'
@@ -1529,6 +1754,42 @@ function Add-LocalLLMModel {
         $Contexts = Get-LocalLLMDefaultContexts
     }
 
+    # Build a quant -> size map for the selected quants (used for QuantSizesGB
+    # and as input to the auto-generated QuantNotes below).
+    $quantSizesGB = [ordered]@{}
+    foreach ($short in $shortToFile.Keys) {
+        $file = $shortToFile[$short]
+        if ($sizesByFile.Contains($file)) {
+            $quantSizesGB[$short] = $sizesByFile[$file]
+        }
+    }
+
+    # Auto-fill Description from HF (cardData → base_model README → this README)
+    # if the caller didn't provide one. Verbose-only so the dashboard stays calm.
+    if ([string]::IsNullOrWhiteSpace($Description)) {
+        Write-Host "Resolving description from HuggingFace..." -ForegroundColor DarkCyan
+        $auto = Resolve-HuggingFaceDescription -Repo $repo
+        if (-not [string]::IsNullOrWhiteSpace($auto)) {
+            $Description = $auto
+            Write-Host "  $Description" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  (no usable README description found — leaving Description empty)" -ForegroundColor DarkGray
+        }
+    }
+
+    # Auto-fill generic QuantNotes from the quant code + size when the user
+    # didn't pass any. Hand-tuned notes (e.g. "use this for -Ctx 256") stay manual.
+    $autoQuantNotes = $null
+    if (-not $QuantNotes -or $QuantNotes.Count -eq 0) {
+        $autoQuantNotes = [ordered]@{}
+        foreach ($code in $codeMap.Keys) {
+            $short = $codeToShort[$code]
+            $size = if ($quantSizesGB.Contains($short)) { $quantSizesGB[$short] } else { $null }
+            $note = New-LocalLLMQuantNoteText -QuantCode $code -SizeGB $size
+            if ($note) { $autoQuantNotes[$short] = $note }
+        }
+    }
+
     $entry = [ordered]@{
         DisplayName = $DisplayName
         Root        = $Root
@@ -1546,8 +1807,14 @@ function Add-LocalLLMModel {
         $entry.Description = $Description
     }
 
+    if ($quantSizesGB.Count -gt 0) {
+        $entry.QuantSizesGB = $quantSizesGB
+    }
+
     if ($QuantNotes -and $QuantNotes.Count -gt 0) {
         $entry.QuantNotes = $QuantNotes
+    } elseif ($autoQuantNotes -and $autoQuantNotes.Count -gt 0) {
+        $entry.QuantNotes = $autoQuantNotes
     }
 
     if ($ContextNotes -and $ContextNotes.Count -gt 0) {
@@ -2500,8 +2767,290 @@ function Format-AliasBuiltList {
     return ($parts -join ', ')
 }
 
+# -------------------------
+# Spectre.Console renderer (soft dependency)
+# Tries to import PwshSpectreConsole on first use. If absent, the dashboard
+# falls back to the legacy Write-Host renderer and we surface a one-line install
+# hint. Set $env:LOCAL_LLM_NO_SPECTRE=1 to disable Spectre even when installed.
+# -------------------------
+
+$script:LocalLLMSpectreState = $null  # $true / $false / $null (unprobed)
+
+function Test-LocalLLMSpectreAvailable {
+    if ($env:LOCAL_LLM_NO_SPECTRE -eq '1') { return $false }
+    if ($null -ne $script:LocalLLMSpectreState) { return $script:LocalLLMSpectreState }
+
+    if (Get-Module -Name PwshSpectreConsole) {
+        $script:LocalLLMSpectreState = $true
+        return $true
+    }
+
+    $available = Get-Module -ListAvailable -Name PwshSpectreConsole -ErrorAction SilentlyContinue
+    if (-not $available) {
+        $script:LocalLLMSpectreState = $false
+        return $false
+    }
+
+    try {
+        Import-Module PwshSpectreConsole -ErrorAction Stop -DisableNameChecking | Out-Null
+        $script:LocalLLMSpectreState = $true
+        return $true
+    } catch {
+        Write-Verbose "PwshSpectreConsole import failed: $($_.Exception.Message)"
+        $script:LocalLLMSpectreState = $false
+        return $false
+    }
+}
+
+function Show-LocalLLMSpectreInstallHint {
+    Write-Host ""
+    Write-Host "Tip: install PwshSpectreConsole for a nicer dashboard:" -ForegroundColor DarkGray
+    Write-Host "       Install-Module PwshSpectreConsole -Scope CurrentUser" -ForegroundColor DarkGray
+    Write-Host "     Reload your profile, or run 'reloadllm', and 'info' will switch to the rich UI." -ForegroundColor DarkGray
+}
+
+function ConvertTo-LocalLLMSpectreSafe {
+    # Spectre markup is `[color]text[/]`. Square brackets in arbitrary text
+    # (e.g. tier badges "[recommended]") collide. Escape with `[[` / `]]`.
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+
+    if ($null -eq $Text) { return "" }
+    return ($Text -replace '\[', '[[') -replace '\]', ']]'
+}
+
+function Format-LocalLLMSpectreFitCell {
+    # Single-quant fit cell for the summary table: short label + colored marker.
+    # marker uses Spectre markup; the bracket/square-bracket text is plain.
+    param(
+        [Parameter(Mandatory = $true)][string]$QuantKey,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$FitClass,
+        [switch]$IsDefault
+    )
+
+    $star = if ($IsDefault) { '*' } else { ' ' }
+
+    $marker, $color = switch ($FitClass) {
+        'fits'  { '+',  'green'  }
+        'tight' { '~',  'yellow' }
+        'over'  { '!',  'red'    }
+        default { '?',  'grey50' }
+    }
+
+    return "[$color]$marker[/]$star$QuantKey"
+}
+
+function Show-ModelCatalogSpectre {
+    param([switch]$All)
+
+    $vramInfo = Get-LocalLLMVRAMInfo
+    $sourceLabel = switch ($vramInfo.Source) {
+        "configured" { "set in settings.json" }
+        "auto"       { "nvidia-smi auto-detect" }
+        "fallback"   { "fallback — nvidia-smi unavailable" }
+        default      { $vramInfo.Source }
+    }
+
+    Write-Host ""
+    Format-SpectrePanel -Header "Models" -Color Blue -Data ("VRAM: [yellow]{0} GB[/] ({1})" -f $vramInfo.GB, (ConvertTo-LocalLLMSpectreSafe $sourceLabel))
+
+    $visibleKeys = @(Get-FilteredModelKeys -IncludeAll:$All)
+    $installed = @(Get-OllamaInstalledModelNames)
+
+    $rows = New-Object System.Collections.Generic.List[object]
+
+    foreach ($key in $visibleKeys) {
+        $def = Get-ModelDef -Key $key
+        $tier = Get-ModelTier -Def $def
+
+        $tierLabel = switch ($tier) {
+            'recommended'  { '[green]recommended[/]' }
+            'experimental' { '[yellow]experimental[/]' }
+            'legacy'       { '[grey50]legacy[/]' }
+            default        { ConvertTo-LocalLLMSpectreSafe $tier }
+        }
+
+        if ($def.ContainsKey("Quants")) {
+            $quantCells = foreach ($qk in $def.Quants.Keys) {
+                $fit = Get-QuantFitClass -Def $def -QuantKey $qk
+                Format-LocalLLMSpectreFitCell -QuantKey $qk -FitClass $fit -IsDefault:($qk -eq $def.Quant)
+            }
+            $quants = ($quantCells -join '  ')
+            $defaultQuant = "[cyan]$($def.Quant)[/]"
+        } else {
+            $quants = "[grey50](single file)[/]"
+            $defaultQuant = "[grey50]—[/]"
+        }
+
+        $contextLabels = @($def.Contexts.Keys | ForEach-Object {
+            if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
+        })
+        $contexts = ($contextLabels -join ' · ')
+
+        $aliases = @($def.Contexts.Keys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ })
+        $builtCount = 0
+        foreach ($a in $aliases) {
+            if ($installed -contains $a -or $installed -contains "${a}:latest") { $builtCount++ }
+        }
+        $built = "$builtCount/$($aliases.Count)"
+        if ($builtCount -eq $aliases.Count) {
+            $built = "[green]$built[/]"
+        } elseif ($builtCount -eq 0) {
+            $built = "[grey50]$built[/]"
+        } else {
+            $built = "[yellow]$built[/]"
+        }
+
+        $rows.Add([pscustomobject]@{
+            Key      = "[white]$key[/]"
+            Name     = ConvertTo-LocalLLMSpectreSafe $def.DisplayName
+            Tier     = $tierLabel
+            Default  = $defaultQuant
+            Quants   = $quants
+            Contexts = ConvertTo-LocalLLMSpectreSafe $contexts
+            Built    = $built
+        }) | Out-Null
+    }
+
+    $rows | Format-SpectreTable -Border Rounded -Color Blue -AllowMarkup -Wrap
+
+    Write-Host ""
+    Write-Host "  Quant cells: " -ForegroundColor DarkGray -NoNewline
+    Write-Host "+" -ForegroundColor Green -NoNewline; Write-Host " fits  " -ForegroundColor DarkGray -NoNewline
+    Write-Host "~" -ForegroundColor Yellow -NoNewline; Write-Host " tight  " -ForegroundColor DarkGray -NoNewline
+    Write-Host "!" -ForegroundColor Red -NoNewline; Write-Host " over  " -ForegroundColor DarkGray -NoNewline
+    Write-Host "?" -ForegroundColor DarkGray -NoNewline; Write-Host " size unknown   " -ForegroundColor DarkGray -NoNewline
+    Write-Host "*name = current default quant" -ForegroundColor DarkGray
+    Write-Host "  Built column: aliases-installed / aliases-configured." -ForegroundColor DarkGray
+
+    if (-not $All) {
+        $hiddenCount = (@(Get-ModelKeys)).Count - $visibleKeys.Count
+        if ($hiddenCount -gt 0) {
+            Write-Host ""
+            Write-Host "$hiddenCount more model(s) hidden. Run 'info -All' to show experimental + legacy, or 'info <key>' for one." -ForegroundColor DarkGray
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Drill in:" -ForegroundColor White
+    Write-Host "  info <key>                     Per-model detail (description, quants, contexts)" -ForegroundColor DarkGray
+    Write-Host "Manage:" -ForegroundColor White
+    Write-Host "  addllm <hf-url> -Key <key>     Add a model from HuggingFace (auto-fills size + description)" -ForegroundColor DarkGray
+    Write-Host "  removellm <key>                Remove a model + its files" -ForegroundColor DarkGray
+    Write-Host "  initmodel <key> [-Force]       (Re)build Ollama aliases for a model" -ForegroundColor DarkGray
+    Write-Host "  cleanorphans, listorphans, reloadllm, purge, ops, qkill, ostop, llm, llmdocs" -ForegroundColor DarkGray
+    Write-Host "  Config: $script:LocalLLMConfigPath" -ForegroundColor DarkGray
+}
+
+function Show-ModelDetailSpectre {
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    $def = Get-ModelDef -Key $Key
+    $tier = Get-ModelTier -Def $def
+    $tierColor = switch ($tier) {
+        'recommended'  { 'green' }
+        'experimental' { 'yellow' }
+        'legacy'       { 'grey50' }
+        default        { 'grey70' }
+    }
+
+    $description = Get-ModelDescription -Def $def
+    $source = if ($def.SourceType -eq 'gguf') { "GGUF · $($def.Repo)" } else { "Remote · $($def.RemoteModel)" }
+    $parser = if ($def.Parser) { $def.Parser } else { 'none' }
+    $limitTools = if ($def.ContainsKey('LimitTools')) { [bool]$def.LimitTools } else { $true }
+
+    $headerLines = New-Object System.Collections.Generic.List[string]
+    if ($description) {
+        $headerLines.Add((ConvertTo-LocalLLMSpectreSafe $description)) | Out-Null
+        $headerLines.Add('') | Out-Null
+    }
+    $headerLines.Add(("[grey70]Source[/]    : {0}" -f (ConvertTo-LocalLLMSpectreSafe $source))) | Out-Null
+    $headerLines.Add(("[grey70]Parser[/]    : {0}    [grey70]LimitTools[/]: {1}" -f (ConvertTo-LocalLLMSpectreSafe $parser), $limitTools)) | Out-Null
+
+    if ($def.ContainsKey('ParserNote') -and $def.ParserNote) {
+        $headerLines.Add(("[grey50]Note[/]      : {0}" -f (ConvertTo-LocalLLMSpectreSafe $def.ParserNote))) | Out-Null
+    }
+
+    $panelHeader = ("[white]{0}[/] · [{1}]{2}[/]" -f (ConvertTo-LocalLLMSpectreSafe $def.DisplayName), $tierColor, $tier)
+    Write-Host ""
+    Format-SpectrePanel -Header $panelHeader -Color $tierColor -Data ($headerLines -join "`n")
+
+    if ($def.ContainsKey('Quants')) {
+        $quantRows = foreach ($qk in $def.Quants.Keys) {
+            $isDefault = ($qk -eq $def.Quant)
+            $fit = Get-QuantFitClass -Def $def -QuantKey $qk
+            $fitMark, $fitColor = switch ($fit) {
+                'fits'  { 'fits',  'green' }
+                'tight' { 'tight', 'yellow' }
+                'over'  { 'over',  'red' }
+                default { '?',     'grey50' }
+            }
+            $size = Get-QuantSizeGB -Def $def -QuantKey $qk
+            $sizeText = if ($null -eq $size) { '—' } else { "{0:N1} GB" -f $size }
+            $note = Get-ModelQuantNote -Def $def -QuantKey $qk
+            if (-not $note) { $note = $def.Quants[$qk] }
+
+            [pscustomobject]@{
+                ' '    = if ($isDefault) { '[cyan]*[/]' } else { ' ' }
+                Quant  = if ($isDefault) { "[cyan]$qk[/]" } else { $qk }
+                Fit    = "[$fitColor]$fitMark[/]"
+                Size   = $sizeText
+                Note   = ConvertTo-LocalLLMSpectreSafe $note
+            }
+        }
+
+        Write-Host ""
+        Write-Host "Quants" -ForegroundColor White
+        $quantRows | Format-SpectreTable -Border Rounded -Color $tierColor -AllowMarkup -Wrap
+    }
+
+    $ctxRows = foreach ($ck in $def.Contexts.Keys) {
+        $label = if ([string]::IsNullOrWhiteSpace($ck)) { 'default' } else { $ck }
+        $tokens = Get-ModelContextValue -Def $def -ContextKey $ck
+        $note = Get-ModelContextNote -Def $def -ContextKey $ck
+        $alias = Get-ModelAliasName -Def $def -ContextKey $ck
+
+        [pscustomobject]@{
+            Context = $label
+            Alias   = ConvertTo-LocalLLMSpectreSafe $alias
+            Tokens  = "{0:N0}" -f [int]$tokens
+            Note    = ConvertTo-LocalLLMSpectreSafe $note
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Contexts" -ForegroundColor White
+    $ctxRows | Format-SpectreTable -Border Rounded -Color $tierColor -AllowMarkup -Wrap
+
+    $installed = @(Get-OllamaInstalledModelNames)
+    $aliases = @($def.Contexts.Keys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ })
+    $built = Format-AliasBuiltList -Names $aliases -Installed $installed
+    Write-Host ""
+    Write-Host "Built : $built" -ForegroundColor DarkGray
+
+    if ($def.Contains('Tools') -and -not [string]::IsNullOrWhiteSpace($def.Tools)) {
+        Write-Host "Tools : $($def.Tools)" -ForegroundColor DarkGray
+    }
+
+    $cmdName = Get-ModelShortcutName -Def $def
+    $contextLabels = @($def.Contexts.Keys | ForEach-Object {
+        if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
+    })
+    $ctxFlag = if ($contextLabels.Count -gt 1) { "[-Ctx $($contextLabels -join '|')]" } else { '' }
+    $usage = "$cmdName $ctxFlag [-Fc] [-Chat] [-Q8]".Trim()
+    if ($def.ContainsKey('Quants')) {
+        $usage += " [-Quant $((@($def.Quants.Keys)) -join '|')]"
+    }
+    Write-Host ""
+    Write-Host "Usage : $usage" -ForegroundColor White
+}
+
 function Show-ModelCatalog {
     param([switch]$All)
+
+    if (Test-LocalLLMSpectreAvailable) {
+        Show-ModelCatalogSpectre -All:$All
+        return
+    }
 
     Write-Section "Commands"
 
@@ -2638,6 +3187,74 @@ function Show-ModelCatalog {
     Write-Host "  Config: $script:LocalLLMConfigPath" -ForegroundColor DarkGray
 }
 
+function Show-ModelDetailFallback {
+    # Per-model detail without Spectre. Mirrors Show-ModelDetailSpectre's fields.
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    $def = Get-ModelDef -Key $Key
+    $tier = Get-ModelTier -Def $def
+    $tierBadge = Format-ModelTierBadge -Def $def
+
+    Write-Host ""
+    Write-Host "$($def.DisplayName) " -ForegroundColor White -NoNewline
+    Write-Host $tierBadge -ForegroundColor DarkYellow
+
+    $description = Get-ModelDescription -Def $def
+    if ($description) {
+        Write-Host "  $description" -ForegroundColor Gray
+    }
+
+    $source = if ($def.SourceType -eq 'gguf') { "GGUF · $($def.Repo)" } else { "Remote · $($def.RemoteModel)" }
+    Write-Host "  Source : $source" -ForegroundColor DarkGray
+    Write-Host "  Parser : $($def.Parser)    LimitTools: $([bool]$def.LimitTools)" -ForegroundColor DarkGray
+
+    if ($def.ContainsKey('ParserNote') -and $def.ParserNote) {
+        Write-Host "  Note   : $($def.ParserNote)" -ForegroundColor DarkGray
+    }
+
+    if ($def.ContainsKey("Quants")) {
+        Write-Host "  Quants :" -ForegroundColor White
+        foreach ($qk in $def.Quants.Keys) {
+            $marker = if ($qk -eq $def.Quant) { "*" } else { " " }
+            $fit = Get-QuantFitClass -Def $def -QuantKey $qk
+            $badge = Format-QuantFitBadge -FitClass $fit
+            $size = Get-QuantSizeGB -Def $def -QuantKey $qk
+            $sizeText = if ($null -eq $size) { '' } else { "{0,5:N1} GB" -f $size }
+            $note = Get-ModelQuantNote -Def $def -QuantKey $qk
+            if (-not $note) { $note = $def.Quants[$qk] }
+
+            Write-Host -NoNewline ("    {0} {1,-8} " -f $marker, $qk)
+            if ($badge) {
+                Write-Host -NoNewline (" {0,-7}" -f $badge) -ForegroundColor (Get-QuantFitBadgeColor -FitClass $fit)
+            }
+            Write-Host -NoNewline (" {0,9} " -f $sizeText) -ForegroundColor DarkGray
+            Write-Host $note -ForegroundColor DarkGray
+        }
+    }
+
+    Write-Host "  Ctx    :" -ForegroundColor White
+    foreach ($ck in $def.Contexts.Keys) {
+        $label = if ([string]::IsNullOrWhiteSpace($ck)) { "default" } else { $ck }
+        $tokens = Get-ModelContextValue -Def $def -ContextKey $ck
+        $alias = Get-ModelAliasName -Def $def -ContextKey $ck
+        $note = Get-ModelContextNote -Def $def -ContextKey $ck
+        if ($note) {
+            Write-Host ("    {0,-8}  {1,-22}  {2}" -f $label, $alias, $note) -ForegroundColor DarkGray
+        } else {
+            Write-Host ("    {0,-8}  {1,-22}  {2,7} tokens" -f $label, $alias, $tokens) -ForegroundColor DarkGray
+        }
+    }
+
+    $installed = @(Get-OllamaInstalledModelNames)
+    $aliases = @($def.Contexts.Keys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ })
+    Write-Host "  Built  : $(Format-AliasBuiltList -Names $aliases -Installed $installed)" -ForegroundColor DarkGray
+
+    if ($def.Contains('Tools') -and -not [string]::IsNullOrWhiteSpace($def.Tools)) {
+        Write-Host "  Tools  : $($def.Tools)" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+}
+
 function Show-LLMProfileInfo {
     param([switch]$All)
 
@@ -2648,18 +3265,52 @@ function Show-LLMProfileInfo {
     Show-OllamaStatus -All:$All
     Show-ModelCatalog -All:$All
 
+    if (-not (Test-LocalLLMSpectreAvailable)) {
+        Show-LocalLLMSpectreInstallHint
+    }
+
     Write-Host ""
 }
 
 function info {
     [CmdletBinding()]
-    param([switch]$All)
+    param(
+        [Parameter(Position = 0)][string]$Key,
+        [switch]$All
+    )
+
+    if ($Key) {
+        $resolved = Resolve-ModelKeyByAnyName -Name $Key
+        if (-not $resolved) {
+            Write-Host "Unknown model: $Key" -ForegroundColor Red
+            Write-Host "Known keys: $((@(Get-ModelKeys)) -join ', ')" -ForegroundColor DarkGray
+            return
+        }
+
+        if (Test-LocalLLMSpectreAvailable) {
+            Show-ModelDetailSpectre -Key $resolved
+        } else {
+            Show-ModelDetailFallback -Key $resolved
+            Show-LocalLLMSpectreInstallHint
+        }
+        return
+    }
+
     Show-LLMProfileInfo -All:$All
 }
 
 function llminfo {
     [CmdletBinding()]
-    param([switch]$All)
+    param(
+        [Parameter(Position = 0)][string]$Key,
+        [switch]$All
+    )
+
+    if ($Key) {
+        info -Key $Key
+        return
+    }
+
     Show-LLMProfileInfo -All:$All
 }
 
@@ -3482,8 +4133,9 @@ Tradeoffs / sizes
   as Description, QuantNotes, and ContextNotes fields.
 
 Manage
-  info                  Dashboard, recommended models only
+  info                  Dashboard, recommended models only (rich UI if PwshSpectreConsole is installed)
   info -All             Dashboard with experimental + legacy
+  info <key>            Per-model detail: description, quants table (with fit + size), contexts table
   reloadllm             Reload llm-models.json and regenerate commands
   ops, qkill, ostop     Ollama: list / stop loaded / restart
   init                  Setup all recommended models
@@ -3502,6 +4154,9 @@ Add or remove a model
   addllm <hf-url-or-repo> -Key <key> -Description '...' -QuantNotes @{q4='~17 GB'} -ContextNotes @{'128'='131k'}
   initmodel <key>
   removellm <key> [-KeepFiles] [-Force]
+
+  Auto-fill on add: Description (from base_model README), QuantSizesGB (from HF blob sizes),
+  and a baseline QuantNotes per quant. Override any field by passing -Description / -QuantNotes etc.
 
 Tiers
   recommended    Daily drivers, known to work. Shown by default.
