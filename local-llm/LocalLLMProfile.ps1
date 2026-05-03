@@ -2851,7 +2851,7 @@ function Show-ModelCatalogSpectre {
     }
 
     Write-Host ""
-    Format-SpectrePanel -Header "Models" -Color Blue -Data ("VRAM: [yellow]{0} GB[/] ({1})" -f $vramInfo.GB, (ConvertTo-LocalLLMSpectreSafe $sourceLabel))
+    Format-SpectrePanel -Header "Models" -Color Blue -Data ("VRAM: [yellow]{0} GB[/] ({1})" -f $vramInfo.GB, (ConvertTo-LocalLLMSpectreSafe $sourceLabel)) | Out-Host
 
     $visibleKeys = @(Get-FilteredModelKeys -IncludeAll:$All)
     $installed = @(Get-OllamaInstalledModelNames)
@@ -2911,7 +2911,7 @@ function Show-ModelCatalogSpectre {
         }) | Out-Null
     }
 
-    $rows | Format-SpectreTable -Border Rounded -Color Blue -AllowMarkup -Wrap
+    $rows | Format-SpectreTable -Border Rounded -Color Blue -AllowMarkup -Wrap | Out-Host
 
     Write-Host ""
     Write-Host "  Quant cells: " -ForegroundColor DarkGray -NoNewline
@@ -2972,7 +2972,7 @@ function Show-ModelDetailSpectre {
 
     $panelHeader = ("[white]{0}[/] · [{1}]{2}[/]" -f (ConvertTo-LocalLLMSpectreSafe $def.DisplayName), $tierColor, $tier)
     Write-Host ""
-    Format-SpectrePanel -Header $panelHeader -Color $tierColor -Data ($headerLines -join "`n")
+    Format-SpectrePanel -Header $panelHeader -Color $tierColor -Data ($headerLines -join "`n") | Out-Host
 
     if ($def.ContainsKey('Quants')) {
         $quantRows = foreach ($qk in $def.Quants.Keys) {
@@ -3000,7 +3000,7 @@ function Show-ModelDetailSpectre {
 
         Write-Host ""
         Write-Host "Quants" -ForegroundColor White
-        $quantRows | Format-SpectreTable -Border Rounded -Color $tierColor -AllowMarkup -Wrap
+        $quantRows | Format-SpectreTable -Border Rounded -Color $tierColor -AllowMarkup -Wrap | Out-Host
     }
 
     $ctxRows = foreach ($ck in $def.Contexts.Keys) {
@@ -3019,7 +3019,7 @@ function Show-ModelDetailSpectre {
 
     Write-Host ""
     Write-Host "Contexts" -ForegroundColor White
-    $ctxRows | Format-SpectreTable -Border Rounded -Color $tierColor -AllowMarkup -Wrap
+    $ctxRows | Format-SpectreTable -Border Rounded -Color $tierColor -AllowMarkup -Wrap | Out-Host
 
     $installed = @(Get-OllamaInstalledModelNames)
     $aliases = @($def.Contexts.Keys | ForEach-Object { Get-ModelAliasName -Def $def -ContextKey $_ })
@@ -3990,7 +3990,7 @@ function Invoke-LLMSelection {
     }
 }
 
-function Start-LLMWizard {
+function Start-LLMWizardClassic {
     while ($true) {
         Clear-Host
         Write-Host "Local LLM launcher" -ForegroundColor Green
@@ -4035,6 +4035,289 @@ function Start-LLMWizard {
             Pause-Menu
         }
     }
+}
+
+# Spectre wizard
+# Mirrors Start-LLMWizardClassic but uses PwshSpectreConsole's selection prompts.
+# Gated on Test-LocalLLMSpectreAvailable (same env switch as the dashboard:
+# $env:LOCAL_LLM_NO_SPECTRE=1 forces the classic wizard even when Spectre is installed).
+
+function Show-LLMWizardHeaderSpectre {
+    Format-SpectrePanel -Header "Local LLM launcher" -Color Green -Data ("[grey50]Config:[/] {0}" -f (ConvertTo-LocalLLMSpectreSafe $script:LocalLLMConfigPath)) | Out-Host
+}
+
+function Select-LLMModelKeySpectre {
+    param([switch]$All)
+
+    $keys = @(Get-FilteredModelKeys -IncludeAll:$All)
+    if ($keys.Count -eq 0) {
+        Write-Host "No models match the current filter." -ForegroundColor Yellow
+        return $null
+    }
+
+    Show-ModelCatalogSpectre -All:$All
+
+    $labelMap = [ordered]@{}
+    foreach ($key in $keys) {
+        $def = Get-ModelDef -Key $key
+        $label = "{0}  ·  {1}" -f (ConvertTo-LocalLLMSpectreSafe $key), (ConvertTo-LocalLLMSpectreSafe $def.DisplayName)
+        $labelMap[$label] = $key
+    }
+    if (-not $All) { $labelMap["[[Show all tiers]]"] = '__all__' }
+    $labelMap["[[Cancel]]"] = '__cancel__'
+
+    $chosen = Read-SpectreSelection -Message "Select model" -Choices @($labelMap.Keys) -PageSize 18
+    if ($null -eq $chosen) { return $null }
+    $value = $labelMap[$chosen]
+
+    if ($value -eq '__cancel__') { return $null }
+    if ($value -eq '__all__')    { return (Select-LLMModelKeySpectre -All) }
+    return $value
+}
+
+function Select-LLMQuantKeySpectre {
+    param([Parameter(Mandatory = $true)][string]$ModelKey)
+
+    $def = Get-ModelDef -Key $ModelKey
+    if (-not $def.ContainsKey("Quants")) { return $null }
+
+    $labelMap = [ordered]@{}
+    foreach ($qk in $def.Quants.Keys) {
+        $fit = Get-QuantFitClass -Def $def -QuantKey $qk
+        $fitTag = switch ($fit) {
+            'fits'  { '[green]fits[/]' }
+            'tight' { '[yellow]tight[/]' }
+            'over'  { '[red]over[/]' }
+            default { '[grey50]?[/]' }
+        }
+        $size = Get-QuantSizeGB -Def $def -QuantKey $qk
+        $sizeStr = if ($null -eq $size) { '' } else { (' {0:N1}GB' -f $size) }
+        $current = if ($qk -eq $def.Quant) { ' *' } else { '' }
+        $note = Get-ModelQuantNote -Def $def -QuantKey $qk
+        $noteSuffix = if ([string]::IsNullOrWhiteSpace($note)) { '' } else { " · " + (ConvertTo-LocalLLMSpectreSafe $note) }
+        $qkSafe = ConvertTo-LocalLLMSpectreSafe $qk
+        $label = "$qkSafe$current $fitTag$sizeStr$noteSuffix"
+        $labelMap[$label] = $qk
+    }
+    $defQuantSafe = ConvertTo-LocalLLMSpectreSafe $def.Quant
+    $labelMap["[[Keep current: $defQuantSafe]]"] = '__keep__'
+
+    $modelKeySafe = ConvertTo-LocalLLMSpectreSafe $ModelKey
+    $chosen = Read-SpectreSelection -Message "Select quant for $modelKeySafe" -Choices @($labelMap.Keys) -PageSize 12
+    if ($null -eq $chosen) { return $def.Quant }
+    $value = $labelMap[$chosen]
+
+    if ($value -eq '__keep__') { return $def.Quant }
+    return $value
+}
+
+function Select-LLMContextKeySpectre {
+    param([Parameter(Mandatory = $true)][string]$ModelKey)
+
+    $def = Get-ModelDef -Key $ModelKey
+
+    $labelMap = [ordered]@{}
+    foreach ($ck in $def.Contexts.Keys) {
+        $aliasName = ConvertTo-LocalLLMSpectreSafe (Get-ModelAliasName -Def $def -ContextKey $ck)
+        $tokens = Get-ModelContextValue -Def $def -ContextKey $ck
+        $ctxLabel = if ([string]::IsNullOrWhiteSpace($ck)) { 'default' } else { $ck }
+        $ctxLabelSafe = ConvertTo-LocalLLMSpectreSafe $ctxLabel
+        $head = "$aliasName  ($tokens tokens, $ctxLabelSafe)"
+        $note = Get-ModelContextNote -Def $def -ContextKey $ck
+        $label = if ([string]::IsNullOrWhiteSpace($note)) { $head } else { "$head · " + (ConvertTo-LocalLLMSpectreSafe $note) }
+        $labelMap[$label] = $ck
+    }
+    $labelMap["[[Back]]"] = '__back__'
+
+    $modelKeySafe = ConvertTo-LocalLLMSpectreSafe $ModelKey
+    $chosen = Read-SpectreSelection -Message "Select context for $modelKeySafe" -Choices @($labelMap.Keys) -PageSize 12
+    if ($null -eq $chosen) { return $null }
+    $value = $labelMap[$chosen]
+
+    if ($value -eq '__back__') { return $null }
+    return $value
+}
+
+function Select-LLMActionSpectre {
+    $labelMap = [ordered]@{
+        "Claude Code  -  Local model behind Claude Code" = 'claude'
+        "Unshackled   -  Local agent via Unshackled"     = 'fc'
+        "Ollama chat  -  Plain ollama run"               = 'chat'
+        "Benchmark    -  Run ospeed for selected alias"  = 'benchmark'
+        "Setup only   -  (Re)build alias"                = 'setup'
+        "Show         -  Run ollama show"                = 'show'
+        "[[Back]]"                                       = '__back__'
+    }
+
+    $chosen = Read-SpectreSelection -Message "Select action" -Choices @($labelMap.Keys) -PageSize 10
+    if ($null -eq $chosen) { return $null }
+    $value = $labelMap[$chosen]
+
+    if ($value -eq '__back__') { return $null }
+    return $value
+}
+
+function Read-LLMQ8ToggleSpectre {
+    return [bool](Read-SpectreConfirm -Message "Use q8 KV cache?" -DefaultAnswer 'n')
+}
+
+function Get-LocalLLMErrorLogPath {
+    $dir = Join-Path $HOME ".local-llm"
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    return (Join-Path $dir "wizard-errors.log")
+}
+
+function Save-LocalLLMWizardError {
+    # Captures a full exception record so the Spectre live-display can't scroll it off
+    # screen. Writes to ~/.local-llm/wizard-errors.log AND prints a high-contrast block.
+    param(
+        [Parameter(Mandatory = $true)]$ErrorRecord,
+        [string]$Context = "wizard"
+    )
+
+    $logPath = Get-LocalLLMErrorLogPath
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $ex = $ErrorRecord.Exception
+    $inner = if ($ex.InnerException) { $ex.InnerException.ToString() } else { "" }
+
+    $block = @(
+        "=== [$stamp] $Context ===",
+        "Type:    $($ex.GetType().FullName)",
+        "Message: $($ex.Message)",
+        "InvocationInfo:",
+        ($ErrorRecord.InvocationInfo.PositionMessage),
+        "ScriptStackTrace:",
+        ($ErrorRecord.ScriptStackTrace),
+        "Inner:",
+        $inner,
+        "----",
+        ""
+    ) -join "`n"
+
+    try { Add-Content -LiteralPath $logPath -Value $block -ErrorAction Stop } catch { }
+
+    Write-Host ""
+    Write-Host "=== ERROR captured ($Context) ===" -ForegroundColor Red
+    Write-Host $ex.Message -ForegroundColor Yellow
+    Write-Host $ErrorRecord.InvocationInfo.PositionMessage -ForegroundColor DarkGray
+    Write-Host "Logged to $logPath" -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+function Invoke-LLMWizardStep {
+    # Single-shot try/catch wrapper for one Spectre prompt. On error, logs the full record,
+    # pauses so the user can read the screen, and returns $null instead of throwing further.
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [Parameter(Mandatory = $true)][string]$Context,
+        [object]$Default = $null
+    )
+
+    try {
+        return (& $Action)
+    }
+    catch {
+        Save-LocalLLMWizardError -ErrorRecord $_ -Context $Context
+        Pause-Menu
+        return $Default
+    }
+}
+
+function Start-LLMWizardSpectre {
+    while ($true) {
+        Clear-Host
+        Show-LLMWizardHeaderSpectre
+
+        $modelKey = Invoke-LLMWizardStep -Context 'select-model' -Action {
+            Select-LLMModelKeySpectre
+        }
+
+        if ([string]::IsNullOrWhiteSpace($modelKey)) {
+            return
+        }
+
+        $def = Get-ModelDef -Key $modelKey
+
+        if ($def.ContainsKey("Quants")) {
+            $quantKey = Invoke-LLMWizardStep -Context "select-quant ($modelKey)" -Action {
+                Select-LLMQuantKeySpectre -ModelKey $modelKey
+            }
+            if ($null -ne $quantKey) {
+                try {
+                    Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
+                }
+                catch {
+                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "set-quant ($modelKey -> $quantKey)"
+                    Pause-Menu
+                    continue
+                }
+            }
+        }
+
+        $contextKey = Invoke-LLMWizardStep -Context "select-context ($modelKey)" -Action {
+            Select-LLMContextKeySpectre -ModelKey $modelKey
+        }
+
+        if ($null -eq $contextKey) {
+            continue
+        }
+
+        $action = Invoke-LLMWizardStep -Context 'select-action' -Action {
+            Select-LLMActionSpectre
+        }
+
+        if ([string]::IsNullOrWhiteSpace($action)) {
+            continue
+        }
+
+        $useQ8 = $false
+        if ($action -in @("chat", "fc", "claude")) {
+            $useQ8 = Invoke-LLMWizardStep -Context 'q8-toggle' -Default $false -Action {
+                Read-LLMQ8ToggleSpectre
+            }
+        }
+
+        try {
+            Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action -UseQ8:$useQ8
+        }
+        catch {
+            Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action)"
+            Pause-Menu
+        }
+    }
+}
+
+function llmlogerr {
+    # Print the tail of ~/.local-llm/wizard-errors.log so a captured trace is easy to grab.
+    param([int]$Lines = 80)
+
+    $logPath = Get-LocalLLMErrorLogPath
+    if (-not (Test-Path $logPath)) {
+        Write-Host "No errors logged yet ($logPath does not exist)." -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "Tail of $logPath (last $Lines lines):" -ForegroundColor Cyan
+    Get-Content -LiteralPath $logPath -Tail $Lines
+}
+
+function llmlogerrclear {
+    $logPath = Get-LocalLLMErrorLogPath
+    if (Test-Path $logPath) {
+        Remove-Item -LiteralPath $logPath -Force
+        Write-Host "Cleared $logPath" -ForegroundColor Green
+    }
+}
+
+function Start-LLMWizard {
+    if (Test-LocalLLMSpectreAvailable) {
+        Start-LLMWizardSpectre
+        return
+    }
+
+    Start-LLMWizardClassic
 }
 
 function Show-LLMDynamicModelSummary {
@@ -4116,7 +4399,7 @@ One function per model — flags select what to do.
   q36p -Q8                      Use q8 KV cache for higher quality
   q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
   llmdefault                    Launch the configured Default model
-  llm                           Guided wizard
+  llm                           Guided wizard (rich UI if PwshSpectreConsole is installed)
 
 Flags
   -Ctx <name>     One of the model's contexts (e.g. fast, deep, 128, 256). Omit for default.
@@ -4178,3 +4461,4 @@ Notes
 
 function llm { Start-LLMWizard }
 function llmmenu { Start-LLMWizard }
+function llmc { Start-LLMWizardClassic }

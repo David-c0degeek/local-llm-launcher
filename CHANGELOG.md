@@ -2,6 +2,19 @@
 
 Past-tense record of shipped changes.
 
+## 2026-05-03 — Spectre wizard
+
+### Added
+
+- **Spectre-rendered `llm` wizard.** `Start-LLMWizard` now dispatches to `Start-LLMWizardSpectre` when PwshSpectreConsole is available, falling back to `Start-LLMWizardClassic` otherwise. The Spectre flow uses `Read-SpectreSelection` for model / quant / context / action picks and `Read-SpectreConfirm` for the `-Q8` toggle, and renders the full `Show-ModelCatalogSpectre` table above the model picker so quant fit / size / built status stay visible while choosing. Same env switch as the dashboard: `$env:LOCAL_LLM_NO_SPECTRE=1` forces the classic wizard.
+- **`llmc` escape hatch.** New `llmc` function calls `Start-LLMWizardClassic` directly, bypassing Spectre regardless of availability — useful when a Spectre render bug makes the rich wizard unusable.
+- **Wizard error trap.** Each Spectre prompt is wrapped in `Invoke-LLMWizardStep`; on exception, `Save-LocalLLMWizardError` records the full trace (timestamp, context tag, exception type/message, `InvocationInfo.PositionMessage`, `ScriptStackTrace`, inner exception) to `~/.local-llm/wizard-errors.log` and pauses with `Press Enter to continue` so a Spectre live-display refresh can't scroll the trace off screen. Inspect with `llmlogerr [-Lines 80]`; reset with `llmlogerrclear`.
+
+### Fixed
+
+- **Spectre markup parse errors crashed wizard prompts.** Choice labels like `[Back]`, `[Cancel]`, `[Show all tiers]`, `[Keep current: …]`, and the fit tags `[fits]`/`[tight]`/`[over]`/`[?]` were passed straight to `SelectionPrompt`, which interprets `[…]` as Spectre markup — every render frame threw `Encountered malformed markup tag …` and the live-display refresh hid the trace. Sentinels are escaped as `[[…]]`; user-supplied text (display names, quant/context keys, notes, `$ModelKey` titles) is routed through `ConvertTo-LocalLLMSpectreSafe`; fit tags became proper colored markup (`[green]fits[/]`, `[yellow]tight[/]`, `[red]over[/]`, `[grey50]?[/]`).
+- **Renderables leaked into captured pipeline output.** `Format-SpectrePanel` / `Format-SpectreTable` `return` a `Spectre.Console.Renderable`; PwshSpectreConsole's `format.ps1xml` only renders that to ANSI at `Out-Default`. Inside `Show-ModelCatalogSpectre` (called from `Select-LLMModelKeySpectre`, captured by `$modelKey = …`), the Panel and Table objects bubbled up into `$modelKey`, producing arrays like `[Panel, Table, "qcoder30"]` and tripping `Cannot convert value to type System.String` on the next `Get-ModelDef -Key $modelKey`. All six `Format-Spectre*` call sites now pipe to `| Out-Host` so the renderable renders eagerly and emits nothing to the caller's pipeline. Side effect: the catalog table that was silently swallowed during the wizard now appears as intended.
+
 ## 2026-05-02 — 256k Qwen3-Coder profile, VRAM-aware tradeoffs, per-quant/context notes
 
 ### Added
