@@ -1672,7 +1672,10 @@ function Add-LocalLLMModel {
     $sizesByFile = Get-HuggingFaceFileSizesGB -Info $hfInfo
     $ggufFiles = @(
         $allFiles | Where-Object {
-            $_ -match '\.gguf$' -and $_ -notmatch '/' -and $_ -notmatch '^mmproj-'
+            $_ -match '\.gguf$' -and
+            $_ -notmatch '/' -and
+            $_ -notmatch '^mmproj-' -and
+            $_ -notmatch '\.imatrix\.gguf$'   # imatrix calibration data, not a quant
         }
     )
 
@@ -1876,6 +1879,126 @@ function addllm {
     )
 
     Add-LocalLLMModel @PSBoundParameters
+}
+
+function Update-LocalLLMModelQuants {
+    # Backfills missing quants on an existing GGUF model entry by re-fetching
+    # the HF repo and adding any quant codes not already in the entry. Existing
+    # Quants/QuantSizesGB/QuantNotes entries are preserved verbatim — only new
+    # keys are added. Auto-generates a baseline note for new quants when the
+    # entry already has a QuantNotes hashtable.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)][string]$Key,
+        [switch]$DryRun
+    )
+
+    $cfg = Get-Content -Raw -Path $script:LocalLLMConfigPath | ConvertFrom-Json -AsHashtable
+
+    if (-not $cfg.Models.Contains($Key)) {
+        throw "Model key '$Key' not found in $script:LocalLLMConfigPath."
+    }
+
+    $entry = $cfg.Models[$Key]
+
+    if ($entry.SourceType -ne 'gguf') {
+        throw "Model '$Key' is SourceType=$($entry.SourceType); only gguf models have quants."
+    }
+    if (-not $entry.ContainsKey('Repo') -or [string]::IsNullOrWhiteSpace($entry.Repo)) {
+        throw "Model '$Key' has no Repo; cannot fetch HF metadata."
+    }
+    if (-not $entry.ContainsKey('Quants')) {
+        throw "Model '$Key' has no Quants section. Use 'addllm' instead."
+    }
+
+    $repo = $entry.Repo
+    Write-Host "Fetching HF metadata for $repo..." -ForegroundColor Cyan
+    $hfInfo = Get-HuggingFaceModelInfo -Repo $repo
+    $allFiles = @($hfInfo.siblings | ForEach-Object { $_.rfilename })
+    $sizesByFile = Get-HuggingFaceFileSizesGB -Info $hfInfo
+    $ggufFiles = @(
+        $allFiles | Where-Object {
+            $_ -match '\.gguf$' -and
+            $_ -notmatch '/' -and
+            $_ -notmatch '^mmproj-' -and
+            $_ -notmatch '\.imatrix\.gguf$'
+        }
+    )
+
+    if ($ggufFiles.Count -eq 0) {
+        throw "No top-level GGUF files found at $repo."
+    }
+
+    $existingShortKeys = @($entry.Quants.Keys)
+    $existingFiles = @($entry.Quants.Values)
+    $addedCount = 0
+
+    foreach ($file in $ggufFiles) {
+        if ($existingFiles -contains $file) { continue }
+
+        $code = Get-HuggingFaceQuantCode -FileName $file
+        if (-not $code) { continue }
+
+        $short = ConvertTo-LocalLLMQuantKey $code
+        if ($existingShortKeys -contains $short) { continue }
+
+        $size = if ($sizesByFile.Contains($file)) { $sizesByFile[$file] } else { $null }
+        $note = New-LocalLLMQuantNoteText -QuantCode $code -SizeGB $size
+
+        $sizeStr = if ($null -eq $size) { '?' } else { ('{0:N1}' -f $size) }
+        Write-Host ("  + {0,-8} {1,6} GB  {2}" -f $short, $sizeStr, $file) -ForegroundColor Green
+
+        if ($DryRun) {
+            $addedCount++
+            continue
+        }
+
+        $entry.Quants[$short] = $file
+
+        if ($null -ne $size) {
+            if (-not $entry.ContainsKey('QuantSizesGB')) {
+                $entry.QuantSizesGB = [ordered]@{}
+            }
+            $entry.QuantSizesGB[$short] = $size
+        }
+
+        if ($entry.ContainsKey('QuantNotes') -and -not [string]::IsNullOrWhiteSpace($note)) {
+            if (-not $entry.QuantNotes.Contains($short)) {
+                $entry.QuantNotes[$short] = $note
+            }
+        }
+
+        $addedCount++
+    }
+
+    if ($addedCount -eq 0) {
+        Write-Host "  (no new quants — entry already has every recognized GGUF in $repo)" -ForegroundColor DarkGray
+        return
+    }
+
+    if ($DryRun) {
+        Write-Host ""
+        Write-Host "Dry-run: would add $addedCount quant(s) to '$Key'. Re-run without -DryRun to write." -ForegroundColor Yellow
+        return
+    }
+
+    Save-LocalLLMConfig -Cfg $cfg
+
+    Write-Host ""
+    Write-Host "Added $addedCount quant(s) to '$Key' in $script:LocalLLMConfigPath." -ForegroundColor Green
+    Reload-LocalLLMConfig
+
+    Write-Host "Run 'initmodel $Key' to download the new quants on demand (only when you launch a context that needs them)." -ForegroundColor Yellow
+}
+
+function updatellm {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)][string]$Key,
+        [switch]$DryRun
+    )
+
+    Update-LocalLLMModelQuants @PSBoundParameters
 }
 
 # -------------------------
@@ -3745,11 +3868,14 @@ function Format-LLMContextLabel {
 }
 
 function Read-LLMChoiceIndex {
+    # Returns an integer index (>= 0) for a numbered selection, -1 for ZeroLabel,
+    # or the matching letter (as a string) when a LetterChoices entry is picked.
     param(
         [Parameter(Mandatory = $true)][string]$Title,
         [Parameter(Mandatory = $true)][object[]]$Items,
         [Parameter(Mandatory = $true)][scriptblock]$Label,
-        [string]$ZeroLabel = "Back"
+        [string]$ZeroLabel = "Back",
+        [hashtable]$LetterChoices = @{}
     )
 
     while ($true) {
@@ -3763,12 +3889,19 @@ function Read-LLMChoiceIndex {
 
         Write-Host ""
         Write-Host ("  0  {0}" -f $ZeroLabel) -ForegroundColor Yellow
+        foreach ($letter in @($LetterChoices.Keys | Sort-Object)) {
+            Write-Host ("  {0}  {1}" -f $letter, $LetterChoices[$letter]) -ForegroundColor Yellow
+        }
         Write-Host ""
 
-        $choice = (Read-Host "Choose").Trim()
+        $choice = (Read-Host "Choose").Trim().ToLowerInvariant()
 
         if ($choice -eq "0") {
             return -1
+        }
+
+        if ($LetterChoices.ContainsKey($choice)) {
+            return $choice
         }
 
         if (-not ($choice -match '^\d+$')) {
@@ -3826,20 +3959,22 @@ function Select-LLMModelKey {
 }
 
 function Select-LLMQuantKey {
+    # Returns: a quant key (chosen), '__keep__' (keep current), or $null (back).
     param([Parameter(Mandatory = $true)][string]$ModelKey)
 
     $def = Get-ModelDef -Key $ModelKey
 
     if (-not $def.ContainsKey("Quants")) {
-        return $null
+        return '__keep__'
     }
 
     $quantKeys = @($def.Quants.Keys)
 
-    $idx = Read-LLMChoiceIndex `
+    $result = Read-LLMChoiceIndex `
         -Title "Select quant for $ModelKey" `
         -Items $quantKeys `
-        -ZeroLabel "Keep current: $($def.Quant)" `
+        -ZeroLabel "Back" `
+        -LetterChoices @{ 'k' = "Keep current: $($def.Quant)" } `
         -Label {
         param($quantKey, $i)
         $current = if ($quantKey -eq $def.Quant) { "  [current]" } else { "" }
@@ -3855,11 +3990,10 @@ function Select-LLMQuantKey {
         return "$head`n      $note"
     }
 
-    if ($idx -lt 0) {
-        return $def.Quant
-    }
+    if ($result -is [string] -and $result -eq 'k') { return '__keep__' }
+    if ($result -is [int] -and $result -lt 0)      { return $null }
 
-    return $quantKeys[$idx]
+    return $quantKeys[$result]
 }
 
 function Select-LLMContextKey {
@@ -3937,14 +4071,16 @@ function Set-ModelQuantForSelectedLaunch {
 }
 
 function Read-LLMQ8Toggle {
+    # Returns $true (q8 on), $false (q8 off), or $null (back).
     while ($true) {
         Write-Host ""
-        $answer = (Read-Host "Use q8 KV cache? [y/N]").Trim().ToLowerInvariant()
+        $answer = (Read-Host "Use q8 KV cache? [y/N/b=back]").Trim().ToLowerInvariant()
 
         if ([string]::IsNullOrWhiteSpace($answer) -or $answer -in @("n", "no")) { return $false }
         if ($answer -in @("y", "yes")) { return $true }
+        if ($answer -in @("b", "back")) { return $null }
 
-        Write-Host "Answer y or n." -ForegroundColor Red
+        Write-Host "Answer y, n, or b." -ForegroundColor Red
     }
 }
 
@@ -3991,48 +4127,70 @@ function Invoke-LLMSelection {
 }
 
 function Start-LLMWizardClassic {
+    $modelKey   = $null
+    $contextKey = $null
+    $action     = $null
+    $useQ8      = $false
+    $step       = 'model'
+
     while ($true) {
-        Clear-Host
-        Write-Host "Local LLM launcher" -ForegroundColor Green
-        Write-Host "Config: $script:LocalLLMConfigPath" -ForegroundColor DarkGray
+        switch ($step) {
+            'model' {
+                Clear-Host
+                Write-Host "Local LLM launcher" -ForegroundColor Green
+                Write-Host "Config: $script:LocalLLMConfigPath" -ForegroundColor DarkGray
 
-        $modelKey = Select-LLMModelKey
+                $modelKey = Select-LLMModelKey
+                if ([string]::IsNullOrWhiteSpace($modelKey)) { return }
 
-        if ([string]::IsNullOrWhiteSpace($modelKey)) {
-            return
-        }
+                $step = 'quant'
+            }
 
-        $def = Get-ModelDef -Key $modelKey
+            'quant' {
+                $def = Get-ModelDef -Key $modelKey
+                if (-not $def.ContainsKey("Quants")) { $step = 'context'; break }
 
-        if ($def.ContainsKey("Quants")) {
-            $quantKey = Select-LLMQuantKey -ModelKey $modelKey
-            Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
-        }
+                $quantKey = Select-LLMQuantKey -ModelKey $modelKey
+                if ($null -eq $quantKey)        { $step = 'model';   break }   # back
+                if ($quantKey -eq '__keep__')   { $step = 'context'; break }
+                Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
+                $step = 'context'
+            }
 
-        $contextKey = Select-LLMContextKey -ModelKey $modelKey
+            'context' {
+                $contextKey = Select-LLMContextKey -ModelKey $modelKey
+                if ($null -eq $contextKey) {
+                    $def = Get-ModelDef -Key $modelKey
+                    $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
+                    break
+                }
+                $step = 'action'
+            }
 
-        if ($null -eq $contextKey) {
-            continue
-        }
+            'action' {
+                $action = Select-LLMAction
+                if ([string]::IsNullOrWhiteSpace($action)) { $step = 'context'; break }
+                $step = if ($action -in @("chat", "fc", "claude")) { 'q8' } else { 'launch' }
+            }
 
-        $action = Select-LLMAction
+            'q8' {
+                $q8 = Read-LLMQ8Toggle
+                if ($null -eq $q8) { $step = 'action'; break }   # back
+                $useQ8 = [bool]$q8
+                $step = 'launch'
+            }
 
-        if ([string]::IsNullOrWhiteSpace($action)) {
-            continue
-        }
-
-        $useQ8 = $false
-        if ($action -in @("chat", "fc", "claude")) {
-            $useQ8 = Read-LLMQ8Toggle
-        }
-
-        try {
-            Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action -UseQ8:$useQ8
-        }
-        catch {
-            Write-Host "Command failed." -ForegroundColor Red
-            Write-Host $_.Exception.Message -ForegroundColor DarkGray
-            Pause-Menu
+            'launch' {
+                try {
+                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action -UseQ8:$useQ8
+                }
+                catch {
+                    Write-Host "Command failed." -ForegroundColor Red
+                    Write-Host $_.Exception.Message -ForegroundColor DarkGray
+                    Pause-Menu
+                }
+                $step = 'model'
+            }
         }
     }
 }
@@ -4076,10 +4234,11 @@ function Select-LLMModelKeySpectre {
 }
 
 function Select-LLMQuantKeySpectre {
+    # Returns: a quant key (chosen), '__keep__' (keep current), or $null (back).
     param([Parameter(Mandatory = $true)][string]$ModelKey)
 
     $def = Get-ModelDef -Key $ModelKey
-    if (-not $def.ContainsKey("Quants")) { return $null }
+    if (-not $def.ContainsKey("Quants")) { return '__keep__' }
 
     $labelMap = [ordered]@{}
     foreach ($qk in $def.Quants.Keys) {
@@ -4101,13 +4260,14 @@ function Select-LLMQuantKeySpectre {
     }
     $defQuantSafe = ConvertTo-LocalLLMSpectreSafe $def.Quant
     $labelMap["[[Keep current: $defQuantSafe]]"] = '__keep__'
+    $labelMap["[[Back]]"] = '__back__'
 
     $modelKeySafe = ConvertTo-LocalLLMSpectreSafe $ModelKey
     $chosen = Read-SpectreSelection -Message "Select quant for $modelKeySafe" -Choices @($labelMap.Keys) -PageSize 12
-    if ($null -eq $chosen) { return $def.Quant }
+    if ($null -eq $chosen) { return $null }
     $value = $labelMap[$chosen]
 
-    if ($value -eq '__keep__') { return $def.Quant }
+    if ($value -eq '__back__') { return $null }
     return $value
 }
 
@@ -4158,7 +4318,17 @@ function Select-LLMActionSpectre {
 }
 
 function Read-LLMQ8ToggleSpectre {
-    return [bool](Read-SpectreConfirm -Message "Use q8 KV cache?" -DefaultAnswer 'n')
+    # Returns $true (q8 on), $false (q8 off), or $null (back).
+    $choices = [ordered]@{
+        'No  -  default'    = $false
+        'Yes -  q8 KV cache' = $true
+        '[[Back]]'          = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Use q8 KV cache?" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return $null }
+    $value = $choices[$chosen]
+    if ($value -eq '__back__') { return $null }
+    return [bool]$value
 }
 
 function Get-LocalLLMErrorLogPath {
@@ -4226,65 +4396,86 @@ function Invoke-LLMWizardStep {
 }
 
 function Start-LLMWizardSpectre {
+    $modelKey   = $null
+    $contextKey = $null
+    $action     = $null
+    $useQ8      = $false
+    $step       = 'model'
+
     while ($true) {
-        Clear-Host
-        Show-LLMWizardHeaderSpectre
+        switch ($step) {
+            'model' {
+                Clear-Host
+                Show-LLMWizardHeaderSpectre
 
-        $modelKey = Invoke-LLMWizardStep -Context 'select-model' -Action {
-            Select-LLMModelKeySpectre
-        }
+                $modelKey = Invoke-LLMWizardStep -Context 'select-model' -Action {
+                    Select-LLMModelKeySpectre
+                }
+                if ([string]::IsNullOrWhiteSpace($modelKey)) { return }
 
-        if ([string]::IsNullOrWhiteSpace($modelKey)) {
-            return
-        }
-
-        $def = Get-ModelDef -Key $modelKey
-
-        if ($def.ContainsKey("Quants")) {
-            $quantKey = Invoke-LLMWizardStep -Context "select-quant ($modelKey)" -Action {
-                Select-LLMQuantKeySpectre -ModelKey $modelKey
+                $step = 'quant'
             }
-            if ($null -ne $quantKey) {
+
+            'quant' {
+                $def = Get-ModelDef -Key $modelKey
+                if (-not $def.ContainsKey("Quants")) { $step = 'context'; break }
+
+                $quantKey = Invoke-LLMWizardStep -Context "select-quant ($modelKey)" -Action {
+                    Select-LLMQuantKeySpectre -ModelKey $modelKey
+                }
+                if ($null -eq $quantKey)      { $step = 'model';   break }   # back
+                if ($quantKey -eq '__keep__') { $step = 'context'; break }
                 try {
                     Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
                 }
                 catch {
                     Save-LocalLLMWizardError -ErrorRecord $_ -Context "set-quant ($modelKey -> $quantKey)"
                     Pause-Menu
-                    continue
+                    $step = 'quant'
+                    break
                 }
+                $step = 'context'
             }
-        }
 
-        $contextKey = Invoke-LLMWizardStep -Context "select-context ($modelKey)" -Action {
-            Select-LLMContextKeySpectre -ModelKey $modelKey
-        }
-
-        if ($null -eq $contextKey) {
-            continue
-        }
-
-        $action = Invoke-LLMWizardStep -Context 'select-action' -Action {
-            Select-LLMActionSpectre
-        }
-
-        if ([string]::IsNullOrWhiteSpace($action)) {
-            continue
-        }
-
-        $useQ8 = $false
-        if ($action -in @("chat", "fc", "claude")) {
-            $useQ8 = Invoke-LLMWizardStep -Context 'q8-toggle' -Default $false -Action {
-                Read-LLMQ8ToggleSpectre
+            'context' {
+                $contextKey = Invoke-LLMWizardStep -Context "select-context ($modelKey)" -Action {
+                    Select-LLMContextKeySpectre -ModelKey $modelKey
+                }
+                if ($null -eq $contextKey) {
+                    $def = Get-ModelDef -Key $modelKey
+                    $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
+                    break
+                }
+                $step = 'action'
             }
-        }
 
-        try {
-            Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action -UseQ8:$useQ8
-        }
-        catch {
-            Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action)"
-            Pause-Menu
+            'action' {
+                $action = Invoke-LLMWizardStep -Context 'select-action' -Action {
+                    Select-LLMActionSpectre
+                }
+                if ([string]::IsNullOrWhiteSpace($action)) { $step = 'context'; break }
+                $step = if ($action -in @("chat", "fc", "claude")) { 'q8' } else { 'launch' }
+            }
+
+            'q8' {
+                $q8 = Invoke-LLMWizardStep -Context 'q8-toggle' -Default $null -Action {
+                    Read-LLMQ8ToggleSpectre
+                }
+                if ($null -eq $q8) { $step = 'action'; break }   # back
+                $useQ8 = [bool]$q8
+                $step = 'launch'
+            }
+
+            'launch' {
+                try {
+                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action -UseQ8:$useQ8
+                }
+                catch {
+                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action)"
+                    Pause-Menu
+                }
+                $step = 'model'
+            }
         }
     }
 }

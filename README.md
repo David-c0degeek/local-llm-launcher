@@ -33,7 +33,7 @@ From the repo root:
 ```powershell
 . .\install.ps1                  # copy files to deployed locations + add to $PROFILE
 . .\install.ps1 -Symlink         # symlink instead of copy (admin / dev mode)
-. .\install.ps1 -Profile         # only ensure $PROFILE dot-sources the deployed file
+. .\install.ps1 -SetupProfile    # only ensure $PROFILE dot-sources the deployed file (alias: -Profile)
 ```
 
 After install, open a fresh PowerShell and run `init` to build Ollama aliases for the recommended models.
@@ -83,6 +83,15 @@ Run `llmdocs` for the full quick reference, or `info` for the dashboard.
 ```powershell
 addllm <hf-url-or-repo> -Key <key> [-Quants Q4_K_P,IQ4_XS] [-DefaultQuant Q4_K_P] [-Tier recommended]
 initmodel <key>
+```
+
+`addllm` registers **every recognized GGUF quant** the HF repo publishes by default (the `imatrix.gguf` calibration file is excluded). Pass `-Quants` only when you want to filter the catalog entry to a subset.
+
+Backfilling missing quants on an existing entry (rerunning HF discovery without overwriting your manual `QuantNotes` / `ContextNotes`):
+
+```powershell
+updatellm <key>            # adds any HF quants missing from the entry
+updatellm <key> -DryRun    # preview without writing
 ```
 
 Removing a model:

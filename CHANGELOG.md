@@ -2,6 +2,18 @@
 
 Past-tense record of shipped changes.
 
+## 2026-05-03 — Wizard back-step nav, full-quant backfill, install fix
+
+### Added
+
+- **`updatellm <key>` / `Update-LocalLLMModelQuants`.** Backfills missing quants on an existing GGUF entry by re-fetching its HF repo and merging any quant codes not already present. Existing `Quants`, `QuantSizesGB`, and `QuantNotes` entries are preserved verbatim — only new keys are added (auto-generated note via `New-LocalLLMQuantNoteText`). `-DryRun` previews the additions without writing. Applied to the catalog: `qcoder30` 3 → 23, `qcodernext` 3 → 23, `q27heretic` 4 → 6, `q27hauhau` 2 → 10. `q36plus` (HF gated, returns 401 on the API) and `q36heretic` (subdirectory-organized repo layout) were left untouched.
+
+### Fixed
+
+- **LM wizard couldn't go back one step.** Both `Start-LLMWizardClassic` and `Start-LLMWizardSpectre` were a flat `while ($true)` / `continue` loop where every `[[Back]]` returned to the top (re-pick model). The Spectre quant menu had no Back at all (only `[[Keep current: …]]`). Both wizards are now step-state machines (`'model' → 'quant' → 'context' → 'action' → 'q8' → 'launch'`); each step's `$null` return walks back exactly one step. Quant menu in Spectre now has both `[[Keep current: <q>]]` and `[[Back]]`; the classic quant menu uses a letter shortcut (`k` = keep current, `0` = back) via a new `-LetterChoices` hashtable on `Read-LLMChoiceIndex`. The q8 prompt also accepts `b` (classic) / `[[Back]]` (Spectre) to walk back to action selection.
+- **`addllm` could pick up imatrix calibration files.** Top-level `*.imatrix.gguf` (mradermacher's calibration data, not a quantized model) used to pass the file filter and only got dropped because `Get-HuggingFaceQuantCode` returned `$null` for it. Now excluded explicitly in both `Add-LocalLLMModel` and `Update-LocalLLMModelQuants` so a future quant-code regex change can't accidentally include them.
+- **`install.ps1` failed when `-Profile` was passed.** The `[switch]$Profile` parameter shadowed PowerShell's `$PROFILE` automatic variable inside the script, so `$PROFILE.CurrentUserAllHosts` resolved to `[switch].CurrentUserAllHosts` (no such property → `$null`), then `Test-Path $null` threw `Value cannot be null`. Renamed the parameter to `[switch]$SetupProfile` with `[Alias("Profile")]` so existing `-Profile` invocations still bind. Also collapsed the convoluted `installFiles` flag computation into one line, and fixed a cosmetic message bug where `\$PROFILE` was meant as a literal but PowerShell escapes with backtick (`` ` ``), not backslash — the message accidentally interpolated the auto-variable.
+
 ## 2026-05-03 — Spectre wizard
 
 ### Added

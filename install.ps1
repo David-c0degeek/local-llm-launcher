@@ -3,14 +3,14 @@
 # Modes:
 #   .\install.ps1                  copy files (default)
 #   .\install.ps1 -Symlink         symlink files (requires admin / developer mode)
-#   .\install.ps1 -Profile         only ensure $PROFILE dot-sources the deployed entry point
+#   .\install.ps1 -SetupProfile    only ensure $PROFILE dot-sources the deployed entry point
 #   .\install.ps1 -DryRun          preview the actions without changing anything
 #
-# Multiple flags compose: -Symlink -Profile installs symlinks AND wires up $PROFILE.
+# Multiple flags compose: -Symlink -SetupProfile installs symlinks AND wires up $PROFILE.
 
 param(
     [switch]$Symlink,
-    [switch]$Profile,
+    [Alias("Profile")][switch]$SetupProfile,
     [switch]$DryRun
 )
 
@@ -26,19 +26,9 @@ $DeployedLocalLLM = Join-Path $HOME ".local-llm"
 $DeployedProxy = Join-Path $HOME ".ollama-proxy"
 $ProfileDotSourceLine = ". `"$DeployedLocalLLM\LocalLLMProfile.ps1`""
 
-$installFiles = $true
-
-if ($Profile -and -not $Symlink -and -not $PSBoundParameters.ContainsKey("DryRun")) {
-    # -Profile alone means "just wire up the profile, don't touch files"
-    $installFiles = -not ($PSBoundParameters.Count -eq 1 -and $PSBoundParameters.ContainsKey("Profile"))
-}
-
-if (-not ($PSBoundParameters.Keys | Where-Object { $_ -in @("Symlink", "DryRun") })) {
-    # No file-mode flag passed, but -Profile alone shouldn't copy files.
-    if ($Profile -and $PSBoundParameters.Count -eq 1) {
-        $installFiles = $false
-    }
-}
+# -SetupProfile alone (no -Symlink, no -DryRun) means "just wire up $PROFILE, don't touch files".
+# Combined with -Symlink or -DryRun, files are still installed/previewed.
+$installFiles = -not ($SetupProfile -and -not $Symlink -and -not $DryRun)
 
 function Write-Action {
     param([string]$Verb, [string]$Detail)
@@ -139,7 +129,7 @@ function Ensure-ProfileDotSource {
     }
 
     if ($existing -and ($existing -match [regex]::Escape($ProfileDotSourceLine))) {
-        Write-Host "  ok       \$PROFILE already sources LocalLLMProfile.ps1" -ForegroundColor DarkGreen
+        Write-Host "  ok       `$PROFILE already sources LocalLLMProfile.ps1 ($profilePath)" -ForegroundColor DarkGreen
         return
     }
 
@@ -214,7 +204,7 @@ if ($installFiles) {
         -Files @("no-think-proxy.py", "enforcer-claude.ps1")
 }
 
-if ($Profile -or -not $installFiles) {
+if ($SetupProfile -or -not $installFiles) {
     Ensure-ProfileDotSource
 }
 
