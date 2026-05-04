@@ -23,3 +23,6 @@ local-llm/logs/
 Thumbs.db
 desktop.ini
 $RECYCLE.BIN/
+
+.idea
+*.backup

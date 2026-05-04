@@ -198,6 +198,20 @@ if ($installFiles) {
         -TargetDir $DeployedLocalLLM `
         -Files @("LocalLLMProfile.ps1", "llm-models.json")
 
+    # lib/ is the modular code tree dot-sourced by LocalLLMProfile.ps1.
+    # Install every *.ps1 in there, mirroring the source order so a fresh
+    # install matches what runs from the repo.
+    $libSource = Join-Path $RepoRoot "local-llm\lib"
+    if (Test-Path $libSource) {
+        $libFiles = @(Get-ChildItem -Path $libSource -Filter '*.ps1' | Sort-Object Name | ForEach-Object { $_.Name })
+        if ($libFiles.Count -gt 0) {
+            Install-Dir-Files `
+                -SourceDir $libSource `
+                -TargetDir (Join-Path $DeployedLocalLLM "lib") `
+                -Files $libFiles
+        }
+    }
+
     Install-Dir-Files `
         -SourceDir (Join-Path $RepoRoot "ollama-proxy") `
         -TargetDir $DeployedProxy `
