@@ -83,8 +83,18 @@ function Select-LLMModelKey {
 
     $keys = @(Get-FilteredModelKeys -IncludeAll:$All)
 
+    # Fresh-catalog escape hatch: addllm tags new models 'experimental' by
+    # default, so a brand-new install has zero recommended models. Falling
+    # through to -All here is friendlier than dead-ending.
+    if ($keys.Count -eq 0 -and -not $All) {
+        $keys = @(Get-FilteredModelKeys -IncludeAll)
+        if ($keys.Count -gt 0) {
+            return (Select-LLMModelKey -All)
+        }
+    }
+
     if ($keys.Count -eq 0) {
-        Write-Host "No models match the current filter." -ForegroundColor Yellow
+        Write-Host "No models configured. Use 'addllm <hf-url> -Key <key>' to add one." -ForegroundColor Yellow
         return $null
     }
 
@@ -366,8 +376,18 @@ function Select-LLMModelKeySpectre {
     param([switch]$All)
 
     $keys = @(Get-FilteredModelKeys -IncludeAll:$All)
+
+    # Same fresh-catalog fallback as the classic wizard: skip straight to
+    # all-tiers when no recommended model exists yet.
+    if ($keys.Count -eq 0 -and -not $All) {
+        $keys = @(Get-FilteredModelKeys -IncludeAll)
+        if ($keys.Count -gt 0) {
+            return (Select-LLMModelKeySpectre -All)
+        }
+    }
+
     if ($keys.Count -eq 0) {
-        Write-Host "No models match the current filter." -ForegroundColor Yellow
+        Write-Host "No models configured. Use 'addllm <hf-url> -Key <key>' to add one." -ForegroundColor Yellow
         return $null
     }
 
