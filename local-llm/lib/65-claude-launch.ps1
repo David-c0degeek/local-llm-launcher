@@ -71,6 +71,17 @@ function Set-ClaudeLocalEnv {
 }
 
 function Start-NoThinkProxy {
+    # Backend default is Ollama (11434). Pass -TargetPort 8080 (or whatever)
+    # to put the proxy in front of llama-server instead. The proxy strips
+    # Anthropic thinking-config from requests and <think>...</think> blocks
+    # from /v1/messages responses (SSE + non-streaming), which keeps reasoning
+    # models from leaking <think> tags into the conversation or breaking
+    # consumers that JSON.parse the response body.
+    param(
+        [int]$TargetPort = 11434,
+        [string]$TargetHost = "127.0.0.1"
+    )
+
     if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
         return
     }
@@ -82,8 +93,10 @@ function Start-NoThinkProxy {
         return
     }
 
+    $target = "${TargetHost}:${TargetPort}"
+
     $script:NoThinkProxyProcess = Start-Process python `
-        -ArgumentList "`"$proxyScript`"", $script:NoThinkProxyPort `
+        -ArgumentList "`"$proxyScript`"", $script:NoThinkProxyPort, $target `
         -PassThru -WindowStyle Hidden -ErrorAction Stop
 
     $deadline = (Get-Date).AddSeconds(3)
@@ -162,6 +175,20 @@ function Ensure-UnshackledInstalled {
     }
 }
 
+function Get-UnshackledExtraArgs {
+    # Merges the -ExtraUnshackledArgs param with $env:UNSHACKLED_EXTRA_ARGS.
+    # Env-var splitting is whitespace-only — sufficient for flags like `-D` or
+    # `-D --debug-file=path`. For values containing spaces, pass via param.
+    param([string[]]$Param)
+
+    $extras = @()
+    if ($env:UNSHACKLED_EXTRA_ARGS) {
+        $extras += ($env:UNSHACKLED_EXTRA_ARGS -split '\s+' | Where-Object { $_ })
+    }
+    if ($Param) { $extras += $Param }
+    return ,$extras
+}
+
 function Invoke-UnshackledCli {
     [CmdletBinding()]
     param(
@@ -201,7 +228,8 @@ function Start-ClaudeWithOllamaModel {
         [switch]$UseQ8,
         [switch]$LimitTools,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
-        [switch]$SkipToolCheck
+        [switch]$SkipToolCheck,
+        [string[]]$ExtraUnshackledArgs
     )
 
     if ([string]::IsNullOrWhiteSpace($Tools)) {
@@ -298,7 +326,8 @@ function Start-ClaudeWithOllamaModel {
         }
 
         if ($Unshackled) {
-            Invoke-UnshackledCli @launchArgs
+            $extras = Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs
+            Invoke-UnshackledCli @launchArgs @extras
         }
         else {
             & claude --model $Model @launchArgs
@@ -351,7 +380,8 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$LimitTools,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$Strict,
-        [string[]]$ExtraArgs
+        [string[]]$ExtraArgs,
+        [string[]]$ExtraUnshackledArgs
     )
 
     $def = Get-ModelDef -Key $Key
@@ -433,18 +463,34 @@ function Start-ClaudeWithLlamaCppModel {
 
     Save-ClaudeEnvBackup
 
+    # Front llama-server with no-think-proxy unless the model opts to keep
+    # thinking. The proxy strips <think>...</think> from /v1/messages
+    # responses, which both reasoning-Qwen variants and Heretic merges leak
+    # into the assistant text and break Unshackled's session-title parser.
+    $useNoThinkProxy = ($thinkingPolicy -ne 'keep')
+
+    if ($useNoThinkProxy) {
+        Start-NoThinkProxy -TargetPort $port
+        $effectiveBaseUrl = "http://localhost:$($script:NoThinkProxyPort)"
+    }
+    else {
+        $effectiveBaseUrl = "http://localhost:$port"
+    }
+
     try {
-        Set-ClaudeLocalEnv -BaseUrl "http://localhost:$port" -Model $def.Root -KeepThinking $false
+        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking $false
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
+        $thinkingLabel = if ($useNoThinkProxy) { "stripped via no-think-proxy:$($script:NoThinkProxyPort)" } else { "kept (direct to llama-server)" }
 
         Write-Host ""
         Write-Host "Launching $backendLabel with $($def.Root) via llama.cpp ($Mode)..." -ForegroundColor Cyan
-        Write-Host "  Base URL : $($session.BaseUrl)" -ForegroundColor DarkGray
+        Write-Host "  Base URL : $effectiveBaseUrl" -ForegroundColor DarkGray
         Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
         Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
         Write-Host "  Port     : $port" -ForegroundColor DarkGray
+        Write-Host "  Thinking : $thinkingLabel" -ForegroundColor DarkGray
         Write-Host "  Tools    : $toolsLabel" -ForegroundColor DarkGray
         Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray
         Write-Host ""
@@ -469,7 +515,8 @@ function Start-ClaudeWithLlamaCppModel {
         }
 
         if ($Unshackled) {
-            Invoke-UnshackledCli @launchArgs
+            $extras = Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs
+            Invoke-UnshackledCli @launchArgs @extras
         }
         else {
             & claude --model $def.Root @launchArgs
@@ -477,6 +524,11 @@ function Start-ClaudeWithLlamaCppModel {
     }
     finally {
         Restore-ClaudeEnvBackup
+
+        if ($useNoThinkProxy) {
+            Stop-NoThinkProxy
+        }
+
         Stop-LlamaServer
     }
 }
