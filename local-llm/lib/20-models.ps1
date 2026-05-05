@@ -63,14 +63,66 @@ function Format-ModelTierBadge {
 }
 
 function Get-ModelFolder {
+    # The folder where this model's GGUF (or downloaded artifacts) live.
+    # Default backend is ollama for backwards compatibility — every existing
+    # caller assumes the Ollama community root.
     param(
         [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [ValidateSet('ollama', 'llamacpp')][string]$Backend = 'ollama'
     )
 
-    $folder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+    $root = if ($Backend -eq 'llamacpp') {
+        $script:Cfg.LlamaCppGgufRoot
+    } else {
+        $script:Cfg.OllamaCommunityRoot
+    }
+
+    $folder = Join-Path $root $Def.Root
     Ensure-Directory $folder
     return $folder
+}
+
+function Copy-OllamaGgufToLlamaCpp {
+    # When the llama.cpp folder is missing a GGUF that already exists under the
+    # Ollama root, hardlink it instead of re-downloading. Same bytes either way;
+    # both backends see the same file; deletes from one don't break the other.
+    # Returns $true if a link was created.
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][string]$LlamaCppFolder
+    )
+
+    $fileName = Get-ModelFileName -Def $Def
+    if ([string]::IsNullOrWhiteSpace($fileName)) { return $false }
+
+    $llamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $LlamaCppFolder -FileName $fileName
+    if (Test-Path $llamaPath) { return $false }
+
+    $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+    $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $fileName
+    if (-not (Test-Path $ollamaPath)) { return $false }
+
+    $parent = Split-Path -Parent $llamaPath
+    Ensure-Directory $parent
+
+    try {
+        New-Item -ItemType HardLink -Path $llamaPath -Target $ollamaPath -ErrorAction Stop | Out-Null
+        Write-Host "Hardlinked existing GGUF: $llamaPath -> $ollamaPath" -ForegroundColor DarkGreen
+        return $true
+    }
+    catch {
+        # Hardlinks fail across volumes; fall back to a regular copy.
+        try {
+            Copy-Item -LiteralPath $ollamaPath -Destination $llamaPath -ErrorAction Stop
+            Write-Host "Copied existing GGUF (cross-volume): $llamaPath" -ForegroundColor DarkGreen
+            return $true
+        }
+        catch {
+            Write-Warning "Could not reuse Ollama GGUF at $ollamaPath : $($_.Exception.Message)"
+            return $false
+        }
+    }
 }
 
 function Get-ModelFileName {
@@ -225,11 +277,18 @@ function Get-ModelStrictBaseContextKey {
 function Get-ModelGgufPath {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [ValidateSet('ollama', 'llamacpp')][string]$Backend = 'ollama'
     )
 
-    $folder = Get-ModelFolder -Key $Key -Def $Def
+    $folder = Get-ModelFolder -Key $Key -Def $Def -Backend $Backend
     $fileName = Get-ModelFileName -Def $Def
+
+    # Reuse an existing Ollama GGUF for the llama.cpp path before downloading.
+    if ($Backend -eq 'llamacpp') {
+        Copy-OllamaGgufToLlamaCpp -Def $Def -LlamaCppFolder $folder | Out-Null
+    }
+
     $ggufPath = Download-HuggingFaceFile -Repo $Def.Repo -FileName $fileName -DestinationFolder $folder
 
     if ($ggufPath -is [array]) {

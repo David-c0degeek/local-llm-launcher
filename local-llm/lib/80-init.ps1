@@ -97,6 +97,8 @@ function Remove-AllLocalLLM {
     Stop-OllamaModels
     Stop-OllamaApp
     Reset-OllamaEnv
+    Stop-LlamaServer -Quiet
+    Remove-LlamaCppOrphanContainers
 
     foreach ($key in (Get-ModelKeys)) {
         Remove-ModelAliases -Key $key
@@ -113,6 +115,20 @@ function Remove-AllLocalLLM {
     Write-Host ""
     Write-Host "Done." -ForegroundColor Green
     Write-Host ""
+}
+
+function Remove-LlamaCppOrphanContainers {
+    # Removes any localllm-llamacpp-* containers we may have left behind on a
+    # crash. Silent when docker is unavailable.
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return }
+
+    $names = & docker ps -a --filter "name=localllm-llamacpp-" --format '{{.Names}}' 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $names) { return }
+
+    foreach ($name in @($names)) {
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        & docker rm -f $name *> $null
+    }
 }
 
 function Teardown-Ollama {

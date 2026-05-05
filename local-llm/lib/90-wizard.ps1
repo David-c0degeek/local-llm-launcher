@@ -187,14 +187,24 @@ function Select-LLMContextKey {
 }
 
 function Select-LLMAction {
-    $actions = @(
-        [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-        [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
-        [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" },
-        [pscustomobject]@{ Key = "benchmark"; Label = "Benchmark"; Description = "Run ospeed for selected alias" },
-        [pscustomobject]@{ Key = "setup"; Label = "Setup/create alias only"; Description = "Download/create selected alias" },
-        [pscustomobject]@{ Key = "show"; Label = "Show ollama model info"; Description = "Run ollama show" }
-    )
+    param([string]$Backend = 'ollama')
+
+    $actions = if ($Backend -eq 'llamacpp') {
+        @(
+            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+            [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "setup"; Label = "Download GGUF only"; Description = "Resolve and cache the GGUF without launching" }
+        )
+    } else {
+        @(
+            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+            [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" },
+            [pscustomobject]@{ Key = "benchmark"; Label = "Benchmark"; Description = "Run ospeed for selected alias" },
+            [pscustomobject]@{ Key = "setup"; Label = "Setup/create alias only"; Description = "Download/create selected alias" },
+            [pscustomobject]@{ Key = "show"; Label = "Show ollama model info"; Description = "Run ollama show" }
+        )
+    }
 
     $idx = Read-LLMChoiceIndex `
         -Title "Select action" `
@@ -210,6 +220,79 @@ function Select-LLMAction {
     }
 
     return $actions[$idx].Key
+}
+
+function Select-LLMBackend {
+    # Returns one of 'ollama', 'llamacpp-native', 'llamacpp-docker', or $null (back).
+    # For models that aren't llama.cpp-eligible, this auto-returns 'ollama'.
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
+
+    if (-not (Test-LlamaCppEligible -Def $Def)) {
+        return 'ollama'
+    }
+
+    $items = @(
+        [pscustomobject]@{ Key = 'ollama';           Label = 'Ollama (default)';                    Description = 'Existing alias-based path' },
+        [pscustomobject]@{ Key = 'llamacpp-native';  Label = 'llama.cpp native';                    Description = 'llama-server.exe on the host' },
+        [pscustomobject]@{ Key = 'llamacpp-docker';  Label = 'llama.cpp docker (turbo3/turbo4 KV)'; Description = 'turboquant container; needs Docker Desktop' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Select backend" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+        param($item, $i)
+        return "$($item.Label)  -  $($item.Description)"
+    }
+
+    if ($idx -lt 0) { return $null }
+    return $items[$idx].Key
+}
+
+function Get-LlamaCppKvCacheChoices {
+    param([Parameter(Mandatory = $true)][string]$Mode)
+
+    $base = @('q8_0', 'f16', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl', 'bf16', 'f32')
+    if ($Mode -eq 'docker') {
+        return @('turbo4', 'turbo3') + $base
+    }
+    return $base
+}
+
+function Select-LLMKvCache {
+    # Returns @{ K; V } or $null (back).
+    param([Parameter(Mandatory = $true)][string]$Mode)
+
+    $choices = Get-LlamaCppKvCacheChoices -Mode $Mode
+
+    $idx = Read-LLMChoiceIndex `
+        -Title ("Select KV cache type ($Mode)") `
+        -Items $choices `
+        -ZeroLabel "Back" `
+        -Label {
+        param($t, $i)
+        $note = switch ($t) {
+            'q8_0'    { 'q8_0 — default; fast and memory-efficient' }
+            'f16'     { 'f16 — full quality, ~2x KV memory of q8_0' }
+            'q5_1'    { 'q5_1 — slightly smaller than q8_0' }
+            'q5_0'    { 'q5_0 — smaller still' }
+            'q4_1'    { 'q4_1 — aggressive; quality risk on long context' }
+            'q4_0'    { 'q4_0 — most aggressive mainline' }
+            'iq4_nl'  { 'iq4_nl — newer 4-bit non-linear' }
+            'bf16'    { 'bf16 — full precision (where supported)' }
+            'f32'     { 'f32 — pristine; rarely needed' }
+            'turbo3'  { 'turbo3 — turboquant fork only (docker)' }
+            'turbo4'  { 'turbo4 — turboquant fork only (docker), most aggressive' }
+            default   { $t }
+        }
+        return "$t  -  $note"
+    }
+
+    if ($idx -lt 0) { return $null }
+
+    $picked = $choices[$idx]
+    return @{ K = $picked; V = $picked }
 }
 
 function Set-ModelQuantForSelectedLaunch {
@@ -257,9 +340,44 @@ function Invoke-LLMSelection {
         [Parameter(Mandatory = $true)][string]$ModelKey,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Action,
+        [string]$Backend = 'ollama',
+        [string]$LlamaCppMode,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
         [switch]$UseQ8
     )
 
+    if ($Backend -eq 'llamacpp') {
+        $def = Get-ModelDef -Key $ModelKey
+
+        switch ($Action) {
+            "claude" {
+                Invoke-Backend -Action launch-claude -Backend llamacpp `
+                    -Key $ModelKey -ContextKey $ContextKey `
+                    -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                    -LimitTools:([bool]$def.LimitTools)
+            }
+
+            "fc" {
+                Invoke-Backend -Action launch-claude -Backend llamacpp `
+                    -Key $ModelKey -ContextKey $ContextKey `
+                    -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                    -LimitTools:([bool]$def.LimitTools) -Unshackled
+            }
+
+            "setup" {
+                $path = Get-ModelGgufPath -Key $ModelKey -Def $def -Backend llamacpp
+                Write-Host "GGUF cached at: $path" -ForegroundColor Green
+            }
+
+            default {
+                throw "Action '$Action' is not supported on the llama.cpp backend."
+            }
+        }
+        return
+    }
+
+    # Ollama backend (existing behaviour).
     switch ($Action) {
         "chat" {
             Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Chat -UseQ8:$UseQ8
@@ -295,11 +413,15 @@ function Invoke-LLMSelection {
 }
 
 function Start-LLMWizardClassic {
-    $modelKey   = $null
-    $contextKey = $null
-    $action     = $null
-    $useQ8      = $false
-    $step       = 'model'
+    $modelKey     = $null
+    $contextKey   = $null
+    $action       = $null
+    $useQ8        = $false
+    $backend      = 'ollama'
+    $llamaCppMode = $null
+    $kvK          = $null
+    $kvV          = $null
+    $step         = 'model'
 
     while ($true) {
         switch ($step) {
@@ -316,29 +438,47 @@ function Start-LLMWizardClassic {
 
             'quant' {
                 $def = Get-ModelDef -Key $modelKey
-                if (-not $def.ContainsKey("Quants")) { $step = 'context'; break }
+                if (-not $def.ContainsKey("Quants")) { $step = 'backend'; break }
 
                 $quantKey = Select-LLMQuantKey -ModelKey $modelKey
                 if ($null -eq $quantKey)        { $step = 'model';   break }   # back
-                if ($quantKey -eq '__keep__')   { $step = 'context'; break }
+                if ($quantKey -eq '__keep__')   { $step = 'backend'; break }
                 Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
+                $step = 'backend'
+            }
+
+            'backend' {
+                $def = Get-ModelDef -Key $modelKey
+                $picked = Select-LLMBackend -Def $def
+                if ($null -eq $picked) {
+                    $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
+                    break
+                }
+                switch ($picked) {
+                    'ollama'           { $backend = 'ollama';   $llamaCppMode = $null }
+                    'llamacpp-native'  { $backend = 'llamacpp'; $llamaCppMode = 'native' }
+                    'llamacpp-docker'  { $backend = 'llamacpp'; $llamaCppMode = 'docker' }
+                }
                 $step = 'context'
             }
 
             'context' {
                 $contextKey = Select-LLMContextKey -ModelKey $modelKey
                 if ($null -eq $contextKey) {
-                    $def = Get-ModelDef -Key $modelKey
-                    $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
+                    $step = 'backend'
                     break
                 }
                 $step = 'action'
             }
 
             'action' {
-                $action = Select-LLMAction
+                $action = Select-LLMAction -Backend $backend
                 if ([string]::IsNullOrWhiteSpace($action)) { $step = 'context'; break }
-                $step = if ($action -in @("chat", "fc", "claude")) { 'q8' } else { 'launch' }
+                if ($action -in @("chat", "fc", "claude")) {
+                    $step = if ($backend -eq 'llamacpp') { 'kvcache' } else { 'q8' }
+                } else {
+                    $step = 'launch'
+                }
             }
 
             'q8' {
@@ -348,9 +488,19 @@ function Start-LLMWizardClassic {
                 $step = 'launch'
             }
 
+            'kvcache' {
+                $picked = Select-LLMKvCache -Mode $llamaCppMode
+                if ($null -eq $picked) { $step = 'action'; break }
+                $kvK = $picked.K
+                $kvV = $picked.V
+                $step = 'launch'
+            }
+
             'launch' {
                 try {
-                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action -UseQ8:$useQ8
+                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
+                        -Backend $backend -LlamaCppMode $llamaCppMode `
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8
                 }
                 catch {
                     Write-Host "Command failed." -ForegroundColor Red
@@ -477,14 +627,25 @@ function Select-LLMContextKeySpectre {
 }
 
 function Select-LLMActionSpectre {
-    $labelMap = [ordered]@{
-        "Claude Code  -  Local model behind Claude Code" = 'claude'
-        "Unshackled   -  Local agent via Unshackled"     = 'fc'
-        "Ollama chat  -  Plain ollama run"               = 'chat'
-        "Benchmark    -  Run ospeed for selected alias"  = 'benchmark'
-        "Setup only   -  (Re)build alias"                = 'setup'
-        "Show         -  Run ollama show"                = 'show'
-        "[[Back]]"                                       = '__back__'
+    param([string]$Backend = 'ollama')
+
+    $labelMap = if ($Backend -eq 'llamacpp') {
+        [ordered]@{
+            "Claude Code  -  Local model behind Claude Code" = 'claude'
+            "Unshackled   -  Local agent via Unshackled"     = 'fc'
+            "Setup only   -  Download GGUF without launching" = 'setup'
+            "[[Back]]"                                       = '__back__'
+        }
+    } else {
+        [ordered]@{
+            "Claude Code  -  Local model behind Claude Code" = 'claude'
+            "Unshackled   -  Local agent via Unshackled"     = 'fc'
+            "Ollama chat  -  Plain ollama run"               = 'chat'
+            "Benchmark    -  Run ospeed for selected alias"  = 'benchmark'
+            "Setup only   -  (Re)build alias"                = 'setup'
+            "Show         -  Run ollama show"                = 'show'
+            "[[Back]]"                                       = '__back__'
+        }
     }
 
     $chosen = Read-SpectreSelection -Message "Select action" -Choices @($labelMap.Keys) -PageSize 10
@@ -493,6 +654,63 @@ function Select-LLMActionSpectre {
 
     if ($value -eq '__back__') { return $null }
     return $value
+}
+
+function Select-LLMBackendSpectre {
+    # Returns 'ollama', 'llamacpp-native', 'llamacpp-docker', or $null (back).
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
+
+    if (-not (Test-LlamaCppEligible -Def $Def)) {
+        return 'ollama'
+    }
+
+    $labelMap = [ordered]@{
+        "Ollama (default)                    -  Existing alias-based path"        = 'ollama'
+        "llama.cpp native                    -  llama-server.exe on the host"     = 'llamacpp-native'
+        "llama.cpp docker (turbo3/turbo4 KV) -  turboquant container; needs Docker" = 'llamacpp-docker'
+        "[[Back]]"                                                                = '__back__'
+    }
+
+    $chosen = Read-SpectreSelection -Message "Select backend" -Choices @($labelMap.Keys) -PageSize 6
+    if ($null -eq $chosen) { return $null }
+    $value = $labelMap[$chosen]
+
+    if ($value -eq '__back__') { return $null }
+    return $value
+}
+
+function Select-LLMKvCacheSpectre {
+    # Returns @{ K; V } or $null (back).
+    param([Parameter(Mandatory = $true)][string]$Mode)
+
+    $choices = Get-LlamaCppKvCacheChoices -Mode $Mode
+
+    $labelMap = [ordered]@{}
+    foreach ($t in $choices) {
+        $note = switch ($t) {
+            'q8_0'   { 'q8_0   -  default; fast and memory-efficient' }
+            'f16'    { 'f16    -  full quality, ~2x KV memory of q8_0' }
+            'q5_1'   { 'q5_1   -  slightly smaller than q8_0' }
+            'q5_0'   { 'q5_0   -  smaller still' }
+            'q4_1'   { 'q4_1   -  aggressive; quality risk on long context' }
+            'q4_0'   { 'q4_0   -  most aggressive mainline' }
+            'iq4_nl' { 'iq4_nl -  newer 4-bit non-linear' }
+            'bf16'   { 'bf16   -  full precision (where supported)' }
+            'f32'    { 'f32    -  pristine; rarely needed' }
+            'turbo3' { 'turbo3 -  turboquant fork only (docker)' }
+            'turbo4' { 'turbo4 -  turboquant fork only (docker), most aggressive' }
+            default  { $t }
+        }
+        $labelMap[$note] = $t
+    }
+    $labelMap["[[Back]]"] = '__back__'
+
+    $chosen = Read-SpectreSelection -Message "Select KV cache type ($Mode)" -Choices @($labelMap.Keys) -PageSize 12
+    if ($null -eq $chosen) { return $null }
+    $value = $labelMap[$chosen]
+
+    if ($value -eq '__back__') { return $null }
+    return @{ K = $value; V = $value }
 }
 
 function Read-LLMQ8ToggleSpectre {
@@ -574,11 +792,15 @@ function Invoke-LLMWizardStep {
 }
 
 function Start-LLMWizardSpectre {
-    $modelKey   = $null
-    $contextKey = $null
-    $action     = $null
-    $useQ8      = $false
-    $step       = 'model'
+    $modelKey     = $null
+    $contextKey   = $null
+    $action       = $null
+    $useQ8        = $false
+    $backend      = 'ollama'
+    $llamaCppMode = $null
+    $kvK          = $null
+    $kvV          = $null
+    $step         = 'model'
 
     while ($true) {
         switch ($step) {
@@ -596,13 +818,13 @@ function Start-LLMWizardSpectre {
 
             'quant' {
                 $def = Get-ModelDef -Key $modelKey
-                if (-not $def.ContainsKey("Quants")) { $step = 'context'; break }
+                if (-not $def.ContainsKey("Quants")) { $step = 'backend'; break }
 
                 $quantKey = Invoke-LLMWizardStep -Context "select-quant ($modelKey)" -Action {
                     Select-LLMQuantKeySpectre -ModelKey $modelKey
                 }
                 if ($null -eq $quantKey)      { $step = 'model';   break }   # back
-                if ($quantKey -eq '__keep__') { $step = 'context'; break }
+                if ($quantKey -eq '__keep__') { $step = 'backend'; break }
                 try {
                     Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey $quantKey
                 }
@@ -612,6 +834,23 @@ function Start-LLMWizardSpectre {
                     $step = 'quant'
                     break
                 }
+                $step = 'backend'
+            }
+
+            'backend' {
+                $def = Get-ModelDef -Key $modelKey
+                $picked = Invoke-LLMWizardStep -Context "select-backend ($modelKey)" -Action {
+                    Select-LLMBackendSpectre -Def $def
+                }
+                if ($null -eq $picked) {
+                    $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
+                    break
+                }
+                switch ($picked) {
+                    'ollama'           { $backend = 'ollama';   $llamaCppMode = $null }
+                    'llamacpp-native'  { $backend = 'llamacpp'; $llamaCppMode = 'native' }
+                    'llamacpp-docker'  { $backend = 'llamacpp'; $llamaCppMode = 'docker' }
+                }
                 $step = 'context'
             }
 
@@ -619,20 +858,21 @@ function Start-LLMWizardSpectre {
                 $contextKey = Invoke-LLMWizardStep -Context "select-context ($modelKey)" -Action {
                     Select-LLMContextKeySpectre -ModelKey $modelKey
                 }
-                if ($null -eq $contextKey) {
-                    $def = Get-ModelDef -Key $modelKey
-                    $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
-                    break
-                }
+                if ($null -eq $contextKey) { $step = 'backend'; break }
                 $step = 'action'
             }
 
             'action' {
+                $captured = $backend
                 $action = Invoke-LLMWizardStep -Context 'select-action' -Action {
-                    Select-LLMActionSpectre
+                    Select-LLMActionSpectre -Backend $captured
                 }
                 if ([string]::IsNullOrWhiteSpace($action)) { $step = 'context'; break }
-                $step = if ($action -in @("chat", "fc", "claude")) { 'q8' } else { 'launch' }
+                if ($action -in @("chat", "fc", "claude")) {
+                    $step = if ($backend -eq 'llamacpp') { 'kvcache' } else { 'q8' }
+                } else {
+                    $step = 'launch'
+                }
             }
 
             'q8' {
@@ -644,12 +884,25 @@ function Start-LLMWizardSpectre {
                 $step = 'launch'
             }
 
+            'kvcache' {
+                $captured = $llamaCppMode
+                $picked = Invoke-LLMWizardStep -Context "kvcache ($llamaCppMode)" -Default $null -Action {
+                    Select-LLMKvCacheSpectre -Mode $captured
+                }
+                if ($null -eq $picked) { $step = 'action'; break }
+                $kvK = $picked.K
+                $kvV = $picked.V
+                $step = 'launch'
+            }
+
             'launch' {
                 try {
-                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action -UseQ8:$useQ8
+                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
+                        -Backend $backend -LlamaCppMode $llamaCppMode `
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8
                 }
                 catch {
-                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action)"
+                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend)"
                     Pause-Menu
                 }
                 $step = 'model'

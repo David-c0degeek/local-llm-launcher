@@ -29,6 +29,17 @@ function Add-LocalLLMModel {
         [bool]$LimitTools = $true,
         [ValidateSet('recommended', 'experimental', 'legacy')][string]$Tier = 'experimental',
         [Nullable[bool]]$Strict,
+        # llama.cpp customization (all optional; persisted only when set).
+        [int]$NGpuLayers,
+        [int]$NCpuMoe,
+        [Nullable[bool]]$Mlock,
+        [Nullable[bool]]$NoMmap,
+        [string]$ChatTemplate,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [string[]]$Tags,
+        [string[]]$ExtraArgs,
+        [Nullable[bool]]$LlamaCppCompatible,
         [switch]$Force
     )
 
@@ -223,6 +234,21 @@ function Add-LocalLLMModel {
         $entry.QuantShortcut = $QuantShortcut
     }
 
+    # llama.cpp opt-in fields. Persist only when the caller passed a value so
+    # entries stay tidy and a missing key continues to mean "use the default".
+    if ($PSBoundParameters.ContainsKey('NGpuLayers') -and $NGpuLayers -gt 0)              { $entry.NGpuLayers = $NGpuLayers }
+    if ($PSBoundParameters.ContainsKey('NCpuMoe')    -and $NCpuMoe    -gt 0)              { $entry.NCpuMoe    = $NCpuMoe }
+    if ($PSBoundParameters.ContainsKey('Mlock')      -and $null -ne $Mlock)               { $entry.Mlock      = [bool]$Mlock }
+    if ($PSBoundParameters.ContainsKey('NoMmap')     -and $null -ne $NoMmap)              { $entry.NoMmap     = [bool]$NoMmap }
+    if (-not [string]::IsNullOrWhiteSpace($ChatTemplate))                                  { $entry.ChatTemplate = $ChatTemplate }
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheK))                                      { $entry.KvCacheK   = $KvCacheK }
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheV))                                      { $entry.KvCacheV   = $KvCacheV }
+    if ($Tags      -and $Tags.Count      -gt 0)                                            { $entry.Tags       = @($Tags) }
+    if ($ExtraArgs -and $ExtraArgs.Count -gt 0)                                            { $entry.ExtraArgs  = @($ExtraArgs) }
+    if ($PSBoundParameters.ContainsKey('LlamaCppCompatible') -and $null -ne $LlamaCppCompatible) {
+        $entry.LlamaCppCompatible = [bool]$LlamaCppCompatible
+    }
+
     if ($cfg.Models.Contains($Key)) {
         $cfg.Models.Remove($Key)
     }
@@ -272,6 +298,16 @@ function addllm {
         [bool]$LimitTools = $true,
         [string]$Tier = 'experimental',
         [Nullable[bool]]$Strict,
+        [int]$NGpuLayers,
+        [int]$NCpuMoe,
+        [Nullable[bool]]$Mlock,
+        [Nullable[bool]]$NoMmap,
+        [string]$ChatTemplate,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [string[]]$Tags,
+        [string[]]$ExtraArgs,
+        [Nullable[bool]]$LlamaCppCompatible,
         [switch]$Force
     )
 

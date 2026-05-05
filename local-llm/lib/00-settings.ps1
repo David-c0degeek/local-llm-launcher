@@ -55,6 +55,18 @@ function Import-LocalLLMConfig {
     $cfg.OllamaAppPath = Expand-LocalLLMPath $cfg.OllamaAppPath
     $cfg.OllamaCommunityRoot = Expand-LocalLLMPath $cfg.OllamaCommunityRoot
 
+    # llama.cpp backend defaults — added when missing so older catalogs keep working.
+    if (-not $cfg.ContainsKey("LlamaCppPort"))                  { $cfg.LlamaCppPort = 8080 }
+    if (-not $cfg.ContainsKey("LlamaCppServerPath"))            { $cfg.LlamaCppServerPath = "%USERPROFILE%\\.local-llm\\llama-cpp\\llama-server.exe" }
+    if (-not $cfg.ContainsKey("LlamaCppDockerImage"))           { $cfg.LlamaCppDockerImage = "ghcr.io/thetom/llama-cpp-turboquant:latest" }
+    if (-not $cfg.ContainsKey("LlamaCppGgufRoot"))              { $cfg.LlamaCppGgufRoot = "%USERPROFILE%\\.local-llm\\gguf" }
+    if (-not $cfg.ContainsKey("LlamaCppDefaultMode"))           { $cfg.LlamaCppDefaultMode = "native" }
+    if (-not $cfg.ContainsKey("LlamaCppHealthCheckTimeoutSec")) { $cfg.LlamaCppHealthCheckTimeoutSec = 120 }
+    if (-not $cfg.ContainsKey("LlamaCppCoexistOllama"))         { $cfg.LlamaCppCoexistOllama = $false }
+
+    $cfg.LlamaCppServerPath = Expand-LocalLLMPath $cfg.LlamaCppServerPath
+    $cfg.LlamaCppGgufRoot   = Expand-LocalLLMPath $cfg.LlamaCppGgufRoot
+
     # Migrate the pre-rename field name (FreeCodeRoot → UnshackledRoot) on read.
     if ($cfg.Contains("FreeCodeRoot") -and -not $cfg.Contains("UnshackledRoot")) {
         $cfg.UnshackledRoot = $cfg.FreeCodeRoot

@@ -30,6 +30,46 @@ function Restore-ClaudeEnvBackup {
     Write-Verbose "Claude env vars restored."
 }
 
+function Set-ClaudeLocalEnv {
+    # Common env-var setup for any local backend (Ollama or llama.cpp). Caller
+    # is responsible for Save-ClaudeEnvBackup before and Restore-ClaudeEnvBackup
+    # after. -KeepThinking leaves thinking-tokens enabled (skip the no-think
+    # toggles); the caller must arrange routing accordingly.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Model,
+        [bool]$KeepThinking = $false
+    )
+
+    $env:ANTHROPIC_BASE_URL = $BaseUrl
+    $env:ANTHROPIC_AUTH_TOKEN = "local"
+    $env:ANTHROPIC_API_KEY = ""
+
+    $env:ANTHROPIC_MODEL = $Model
+    $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $Model
+    $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $Model
+    $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $Model
+
+    if (-not $KeepThinking) {
+        $env:CLAUDE_CODE_DISABLE_THINKING = "1"
+        $env:MAX_THINKING_TOKENS = "0"
+        $env:CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = "1"
+    }
+
+    $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
+    $env:DISABLE_PROMPT_CACHING = "1"
+
+    # Local models prefill slowly on big prompts; raise SDK timeout so the
+    # client doesn't abort + retry mid-prefill (which restarts the work).
+    $env:API_TIMEOUT_MS = "1800000"
+
+    # Drop the auto-memory system-prompt block (and the turn-end extract
+    # agent). Saves several KB of input tokens per turn — significant when
+    # prefill is the bottleneck.
+    $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
+}
+
 function Start-NoThinkProxy {
     if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
         return
@@ -216,39 +256,15 @@ function Start-ClaudeWithOllamaModel {
     Save-ClaudeEnvBackup
 
     try {
-        if ($keepThinking) {
+        $baseUrl = if ($keepThinking) {
             # Skip the strip proxy and let thinking blocks reach Ollama directly.
-            $env:ANTHROPIC_BASE_URL = "http://localhost:11434"
-        }
-        else {
-            $env:ANTHROPIC_BASE_URL = "http://localhost:$($script:NoThinkProxyPort)"
+            "http://localhost:11434"
+        } else {
+            "http://localhost:$($script:NoThinkProxyPort)"
         }
 
+        Set-ClaudeLocalEnv -BaseUrl $baseUrl -Model $Model -KeepThinking $keepThinking
         $env:ANTHROPIC_AUTH_TOKEN = "ollama"
-        $env:ANTHROPIC_API_KEY = ""
-
-        $env:ANTHROPIC_MODEL = $Model
-        $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $Model
-        $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $Model
-        $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $Model
-
-        if (-not $keepThinking) {
-            $env:CLAUDE_CODE_DISABLE_THINKING = "1"
-            $env:MAX_THINKING_TOKENS = "0"
-            $env:CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = "1"
-        }
-
-        $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
-        $env:DISABLE_PROMPT_CACHING = "1"
-
-        # Local models prefill slowly on big prompts; raise SDK timeout so the
-        # client doesn't abort + retry mid-prefill (which restarts the work).
-        $env:API_TIMEOUT_MS = "1800000"
-
-        # Drop the auto-memory system-prompt block (and the turn-end extract
-        # agent). Saves several KB of input tokens per turn — significant when
-        # prefill is the bottleneck.
-        $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
@@ -316,8 +332,164 @@ function Start-OllamaChat {
 
 function Get-ClaudeTargetSummary {
     if ($env:ANTHROPIC_DEFAULT_OPUS_MODEL) {
-        return "Ollama -> $($env:ANTHROPIC_DEFAULT_OPUS_MODEL) @ $($env:ANTHROPIC_BASE_URL)"
+        return "Local -> $($env:ANTHROPIC_DEFAULT_OPUS_MODEL) @ $($env:ANTHROPIC_BASE_URL)"
     }
 
     return "Default (Anthropic API)"
+}
+
+function Start-ClaudeWithLlamaCppModel {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'docker')][string]$Mode,
+        [string]$KvCacheK,
+        [string]$KvCacheV,
+        [string]$Tools,
+        [Nullable[bool]]$IncludeInlineToolSchemas,
+        [switch]$LimitTools,
+        [Alias("FreeCode", "Fc")][switch]$Unshackled,
+        [switch]$Strict,
+        [string[]]$ExtraArgs
+    )
+
+    $def = Get-ModelDef -Key $Key
+
+    if ($def.SourceType -ne 'gguf') {
+        throw "Model '$Key' has SourceType=$($def.SourceType); llama.cpp only supports gguf-source models."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Tools)) {
+        $Tools = $script:Cfg.LocalModelTools
+    }
+
+    if ($null -eq $IncludeInlineToolSchemas) {
+        $IncludeInlineToolSchemas = [bool]$LimitTools
+    }
+
+    # Avoid double-loading on a single GPU unless the user opted into coexistence.
+    $coexist = if ($script:Cfg.Contains('LlamaCppCoexistOllama')) { [bool]$script:Cfg.LlamaCppCoexistOllama } else { $false }
+    if (-not $coexist) {
+        Stop-OllamaModels
+        Stop-OllamaApp
+    }
+
+    # Stop any prior llama-server we own.
+    Stop-LlamaServer -Quiet
+
+    # Resolve GGUF (downloads on demand; reuses Ollama copy when available).
+    $ggufPath = Get-ModelGgufPath -Key $Key -Def $def -Backend llamacpp
+
+    # Pick a free port from the configured default.
+    $defaultPort = if ($script:Cfg.Contains('LlamaCppPort')) { [int]$script:Cfg.LlamaCppPort } else { 8080 }
+    $port = Find-LlamaCppFreePort -StartPort $defaultPort
+
+    # Build argv. Native uses the host path; Docker rewrites to /models/<file>.
+    if ($Mode -eq 'docker') {
+        $modelHostDir = Split-Path -Parent $ggufPath
+        $modelFile = Split-Path -Leaf $ggufPath
+        $modelArgPath = "/models/$modelFile"
+    } else {
+        $modelHostDir = $null
+        $modelArgPath = $ggufPath
+    }
+
+    $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
+
+    $serverArgs = Build-LlamaServerArgs `
+        -Def $def `
+        -ContextKey $ContextKey `
+        -Mode $Mode `
+        -ModelArgPath $modelArgPath `
+        -Port $port `
+        -KvK $KvCacheK `
+        -KvV $KvCacheV `
+        -ThinkingPolicy $thinkingPolicy `
+        -Strict:$Strict `
+        -ExtraArgs $ExtraArgs
+
+    # Spin up the server.
+    $session = @{
+        Backend       = 'llamacpp'
+        Mode          = $Mode
+        Port          = $port
+        BaseUrl       = "http://localhost:$port"
+        Model         = $def.Root
+        GgufPath      = $ggufPath
+        Pid           = $null
+        ContainerName = $null
+        ContainerId   = $null
+    }
+
+    if ($Mode -eq 'docker') {
+        Ensure-LlamaCppDocker | Out-Null
+        $image = $script:Cfg.LlamaCppDockerImage
+        $containerInfo = Start-LlamaServerDocker -Image $image -ModelHostDir $modelHostDir -Port $port -ServerArgs $serverArgs
+        $session.ContainerId   = $containerInfo.ContainerId
+        $session.ContainerName = $containerInfo.ContainerName
+    } else {
+        $serverPath = Ensure-LlamaServerNative
+        $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs
+        $session.Pid = $proc.Id
+    }
+
+    Set-CurrentBackendSession -Session $session
+
+    try {
+        Wait-LlamaServer -Port $port
+    }
+    catch {
+        Stop-LlamaServer -Quiet
+        throw
+    }
+
+    Save-ClaudeEnvBackup
+
+    try {
+        Set-ClaudeLocalEnv -BaseUrl "http://localhost:$port" -Model $def.Root -KeepThinking $false
+
+        $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
+        $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
+
+        Write-Host ""
+        Write-Host "Launching $backendLabel with $($def.Root) via llama.cpp ($Mode)..." -ForegroundColor Cyan
+        Write-Host "  Base URL : $($session.BaseUrl)" -ForegroundColor DarkGray
+        Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
+        Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+        Write-Host "  Port     : $port" -ForegroundColor DarkGray
+        Write-Host "  Tools    : $toolsLabel" -ForegroundColor DarkGray
+        Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray
+        Write-Host ""
+
+        $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
+
+        $launchArgs = if ($LimitTools) {
+            @(
+                '--dangerously-skip-permissions',
+                '--tools',
+                $Tools,
+                '--append-system-prompt',
+                $systemPrompt
+            )
+        }
+        else {
+            @(
+                '--dangerously-skip-permissions',
+                '--append-system-prompt',
+                $systemPrompt
+            )
+        }
+
+        if ($Unshackled) {
+            Invoke-UnshackledCli @launchArgs
+        }
+        else {
+            & claude --model $def.Root @launchArgs
+        }
+    }
+    finally {
+        Restore-ClaudeEnvBackup
+        Stop-LlamaServer
+    }
 }
