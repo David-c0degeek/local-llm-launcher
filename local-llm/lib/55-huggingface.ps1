@@ -265,6 +265,10 @@ function Get-HuggingFaceQuantCode {
         '(Q\d_K_[A-Z])$',
         '(Q\d_K)$',
         '(Q\d_\d)$',
+        # mudler / APEX scheme: APEX-Mini / APEX-Compact / APEX-Balanced /
+        # APEX-Quality, plus an `-I-` infix marking the imatrix variant.
+        # Match any capitalized tier word so new tiers don't need code changes.
+        '(APEX(?:-I)?-[A-Z][A-Za-z]+)$',
         '(BF16|F16|F32)$'
     )
 
