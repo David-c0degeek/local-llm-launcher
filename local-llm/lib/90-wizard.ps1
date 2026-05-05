@@ -223,7 +223,7 @@ function Select-LLMAction {
 }
 
 function Select-LLMBackend {
-    # Returns one of 'ollama', 'llamacpp-native', 'llamacpp-docker', or $null (back).
+    # Returns one of 'ollama', 'llamacpp-native', 'llamacpp-turboquant', or $null (back).
     # For models that aren't llama.cpp-eligible, this auto-returns 'ollama'.
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
 
@@ -232,9 +232,9 @@ function Select-LLMBackend {
     }
 
     $items = @(
-        [pscustomobject]@{ Key = 'ollama';           Label = 'Ollama (default)';                    Description = 'Existing alias-based path' },
-        [pscustomobject]@{ Key = 'llamacpp-native';  Label = 'llama.cpp native';                    Description = 'llama-server.exe on the host' },
-        [pscustomobject]@{ Key = 'llamacpp-docker';  Label = 'llama.cpp docker (turbo3/turbo4 KV)'; Description = 'turboquant container; needs Docker Desktop' }
+        [pscustomobject]@{ Key = 'ollama';              Label = 'Ollama (default)';                       Description = 'Existing alias-based path' },
+        [pscustomobject]@{ Key = 'llamacpp-native';     Label = 'llama.cpp native';                       Description = 'Upstream llama-server.exe (mainline KV types)' },
+        [pscustomobject]@{ Key = 'llamacpp-turboquant'; Label = 'llama.cpp turboquant (turbo3/turbo4 KV)'; Description = 'Fork binary; supports turbo KV cache types' }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -254,7 +254,7 @@ function Get-LlamaCppKvCacheChoices {
     param([Parameter(Mandatory = $true)][string]$Mode)
 
     $base = @('q8_0', 'f16', 'q5_1', 'q5_0', 'q4_1', 'q4_0', 'iq4_nl', 'bf16', 'f32')
-    if ($Mode -eq 'docker') {
+    if ($Mode -eq 'turboquant') {
         return @('turbo4', 'turbo3') + $base
     }
     return $base
@@ -455,9 +455,9 @@ function Start-LLMWizardClassic {
                     break
                 }
                 switch ($picked) {
-                    'ollama'           { $backend = 'ollama';   $llamaCppMode = $null }
-                    'llamacpp-native'  { $backend = 'llamacpp'; $llamaCppMode = 'native' }
-                    'llamacpp-docker'  { $backend = 'llamacpp'; $llamaCppMode = 'docker' }
+                    'ollama'              { $backend = 'ollama';   $llamaCppMode = $null }
+                    'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
+                    'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
                 }
                 $step = 'context'
             }
@@ -657,7 +657,7 @@ function Select-LLMActionSpectre {
 }
 
 function Select-LLMBackendSpectre {
-    # Returns 'ollama', 'llamacpp-native', 'llamacpp-docker', or $null (back).
+    # Returns 'ollama', 'llamacpp-native', 'llamacpp-turboquant', or $null (back).
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
 
     if (-not (Test-LlamaCppEligible -Def $Def)) {
@@ -665,10 +665,10 @@ function Select-LLMBackendSpectre {
     }
 
     $labelMap = [ordered]@{
-        "Ollama (default)                    -  Existing alias-based path"        = 'ollama'
-        "llama.cpp native                    -  llama-server.exe on the host"     = 'llamacpp-native'
-        "llama.cpp docker (turbo3/turbo4 KV) -  turboquant container; needs Docker" = 'llamacpp-docker'
-        "[[Back]]"                                                                = '__back__'
+        "Ollama (default)                       -  Existing alias-based path"             = 'ollama'
+        "llama.cpp native                       -  Upstream binary (mainline KV)"         = 'llamacpp-native'
+        "llama.cpp turboquant (turbo3/turbo4 KV) -  Fork binary supporting turbo KV"      = 'llamacpp-turboquant'
+        "[[Back]]"                                                                        = '__back__'
     }
 
     $chosen = Read-SpectreSelection -Message "Select backend" -Choices @($labelMap.Keys) -PageSize 6
@@ -847,9 +847,9 @@ function Start-LLMWizardSpectre {
                     break
                 }
                 switch ($picked) {
-                    'ollama'           { $backend = 'ollama';   $llamaCppMode = $null }
-                    'llamacpp-native'  { $backend = 'llamacpp'; $llamaCppMode = 'native' }
-                    'llamacpp-docker'  { $backend = 'llamacpp'; $llamaCppMode = 'docker' }
+                    'ollama'              { $backend = 'ollama';   $llamaCppMode = $null }
+                    'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
+                    'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
                 }
                 $step = 'context'
             }

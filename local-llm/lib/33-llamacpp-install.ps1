@@ -208,47 +208,145 @@ function Ensure-LlamaServerNative {
     return Install-LlamaServerNative
 }
 
-function Test-DockerAvailable {
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        return $false
+function Get-LlamaCppTurboquantInstallRoot {
+    $root = $script:Cfg.LlamaCppTurboquantRoot
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        $root = Join-Path $HOME ".local-llm\llama-cpp-turboquant"
+    }
+    return $root
+}
+
+function Find-TurboquantServerExe {
+    # Searches for llama-server.exe under the turboquant install root. The
+    # turboquant ZIP layout isn't fixed (releases sometimes nest under a
+    # version folder), so we glob recursively.
+    $root = Get-LlamaCppTurboquantInstallRoot
+    if (-not (Test-Path $root)) { return $null }
+
+    $hit = Get-ChildItem -Path $root -Filter 'llama-server.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+
+    return $null
+}
+
+function Get-LlamaCppTurboquantRepo {
+    $repo = $script:Cfg.LlamaCppTurboquantRepo
+    if ([string]::IsNullOrWhiteSpace($repo)) { $repo = "TheTom/llama-cpp-turboquant" }
+    return $repo
+}
+
+function Get-LlamaCppTurboquantLatestRelease {
+    $headers = @{ "User-Agent" = "LocalLLMProfile/1.0"; "Accept" = "application/vnd.github+json" }
+    $url = "https://api.github.com/repos/$(Get-LlamaCppTurboquantRepo)/releases/latest"
+
+    $oldProgress = $global:ProgressPreference
+    $global:ProgressPreference = 'SilentlyContinue'
+    try {
+        return Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 30
+    }
+    finally {
+        $global:ProgressPreference = $oldProgress
+    }
+}
+
+function Select-TurboquantReleaseAsset {
+    # Turboquant currently ships Windows-x64-CUDA only on the win side.
+    # Match the windows zip with -cuda in the name; reject the macOS asset.
+    param([Parameter(Mandatory = $true)]$Release)
+
+    $hit = $Release.assets | Where-Object {
+        $_.name -match '\.zip$' -and $_.name -match 'windows' -and $_.name -match 'cuda'
+    } | Select-Object -First 1
+
+    if (-not $hit) {
+        $names = (@($Release.assets | ForEach-Object { $_.name })) -join ', '
+        throw "No Windows CUDA turboquant asset found in release $($Release.tag_name). Available: $names"
     }
 
-    & docker info *> $null
-    return ($LASTEXITCODE -eq 0)
+    return $hit
 }
 
-function Test-DockerImagePresent {
-    param([Parameter(Mandatory = $true)][string]$Image)
-
-    & docker image inspect $Image *> $null
-    return ($LASTEXITCODE -eq 0)
-}
-
-function Install-LlamaCppDockerImage {
+function Install-LlamaServerTurboquant {
     [CmdletBinding()]
     param([switch]$Force)
 
-    if (-not (Test-DockerAvailable)) {
-        throw "Docker is not available. Install Docker Desktop from https://www.docker.com/products/docker-desktop and ensure WSL2 + GPU passthrough are configured."
+    $installRoot = Get-LlamaCppTurboquantInstallRoot
+    Ensure-Directory $installRoot
+
+    $existing = Find-TurboquantServerExe
+    if (-not $Force -and $existing) {
+        Write-Host "Turboquant llama-server already installed: $existing" -ForegroundColor DarkGray
+        return $existing
     }
 
-    $image = $script:Cfg.LlamaCppDockerImage
+    Write-Host "Resolving latest turboquant release ($(Get-LlamaCppTurboquantRepo))..." -ForegroundColor Cyan
 
-    if (-not $Force -and (Test-DockerImagePresent -Image $image)) {
-        return $image
+    $release = Get-LlamaCppTurboquantLatestRelease
+    $asset = Select-TurboquantReleaseAsset -Release $release
+
+    $sizeMB = [math]::Round($asset.size / 1MB, 1)
+    Write-Host "Asset: $($asset.name)  ($sizeMB MB)" -ForegroundColor DarkGray
+    Write-Host "Note: turboquant currently ships only a CUDA 12.4 x64 build for Windows." -ForegroundColor DarkYellow
+
+    $tmpZip = Join-Path $env:TEMP $asset.name
+    if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force }
+
+    # Free-disk sanity: need ~ asset size unzipped + ~ asset size for the zip.
+    $drive = (Split-Path -Qualifier $installRoot)
+    if ($drive) {
+        $free = (Get-PSDrive -Name $drive.TrimEnd(':') -ErrorAction SilentlyContinue).Free
+        if ($free -and $free -lt ($asset.size * 2)) {
+            Write-Warning "Low disk: $([math]::Round($free / 1GB, 1)) GB free on $drive (need ~$([math]::Round($asset.size * 2 / 1GB, 1)) GB for ZIP + extracted files)."
+        }
     }
 
-    Write-Host "Pulling $image (first run only)..." -ForegroundColor Cyan
-    & docker pull $image
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker pull $image failed (exit $LASTEXITCODE)."
+    Write-Host "Downloading $sizeMB MB to $tmpZip..." -ForegroundColor Cyan
+    $oldProgress = $global:ProgressPreference
+    $global:ProgressPreference = 'SilentlyContinue'
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 1800
+    }
+    finally {
+        $global:ProgressPreference = $oldProgress
     }
 
-    return $image
+    Write-Host "Extracting to $installRoot..." -ForegroundColor Cyan
+    Expand-Archive -LiteralPath $tmpZip -DestinationPath $installRoot -Force
+    Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+
+    $serverPath = Find-TurboquantServerExe
+    if (-not $serverPath) {
+        throw "Extracted turboquant archive but llama-server.exe was not found anywhere under $installRoot. The release layout may have changed."
+    }
+
+    "$($release.tag_name)" | Set-Content -LiteralPath (Join-Path $installRoot ".build-stamp") -Encoding utf8
+
+    Write-Host "Installed turboquant llama-server: $serverPath" -ForegroundColor Green
+    return $serverPath
 }
 
-function Ensure-LlamaCppDocker {
-    # Returns the image tag, pulling it lazily on first use.
-    return Install-LlamaCppDockerImage
+function Ensure-LlamaServerTurboquant {
+    # Returns the resolved path to the turboquant llama-server.exe, installing
+    # it if absent (after asking once). Throws if the user declines.
+    param([switch]$NonInteractive)
+
+    $existing = Find-TurboquantServerExe
+    if ($existing) { return $existing }
+
+    if ($NonInteractive) {
+        return Install-LlamaServerTurboquant
+    }
+
+    Write-Host ""
+    Write-Host "turboquant llama-server is not installed." -ForegroundColor Yellow
+    Write-Host "  Source: github.com/$(Get-LlamaCppTurboquantRepo)/releases/latest" -ForegroundColor DarkGray
+    Write-Host "  Target: $(Get-LlamaCppTurboquantInstallRoot)" -ForegroundColor DarkGray
+    Write-Host "  Note  : ~700 MB download (Windows x64 CUDA 12.4 only)" -ForegroundColor DarkGray
+    $answer = (Read-Host "Download and install now? [Y/n]").Trim().ToLowerInvariant()
+
+    if ($answer -in @("n", "no")) {
+        throw "turboquant is required for the llama.cpp turboquant backend. Aborted."
+    }
+
+    return Install-LlamaServerTurboquant
 }

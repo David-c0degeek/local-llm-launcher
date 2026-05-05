@@ -19,13 +19,13 @@ function Test-LlamaCppKvType {
     }
 
     if ($type -in $script:LlamaCppTurboKvTypes) {
-        if ($Mode -ne 'docker') {
-            throw "KV cache type '$type' requires the llama.cpp turboquant Docker image. Pick a mainline type ($($script:LlamaCppMainlineKvTypes -join ', ')) or switch to llama.cpp docker mode."
+        if ($Mode -ne 'turboquant') {
+            throw "KV cache type '$type' requires the llama.cpp turboquant fork. Pick a mainline type ($($script:LlamaCppMainlineKvTypes -join ', ')) or switch to llama.cpp turboquant mode."
         }
         return
     }
 
-    throw "Unknown KV cache type '$type'. Mainline: $($script:LlamaCppMainlineKvTypes -join ', '); turbo (docker only): $($script:LlamaCppTurboKvTypes -join ', ')."
+    throw "Unknown KV cache type '$type'. Mainline: $($script:LlamaCppMainlineKvTypes -join ', '); turbo (turboquant only): $($script:LlamaCppTurboKvTypes -join ', ')."
 }
 
 function Get-LlamaCppKvTypes {
@@ -53,7 +53,7 @@ function Build-LlamaServerArgs {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native', 'docker')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
         [Parameter(Mandatory = $true)][string]$ModelArgPath,
         [Parameter(Mandatory = $true)][int]$Port,
         [string]$KvK,

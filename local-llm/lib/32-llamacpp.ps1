@@ -99,47 +99,6 @@ function Start-LlamaServerNative {
     return $proc
 }
 
-function Start-LlamaServerDocker {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Image,
-        [Parameter(Mandatory = $true)][string]$ModelHostDir,
-        [Parameter(Mandatory = $true)][int]$Port,
-        [Parameter(Mandatory = $true)][string[]]$ServerArgs
-    )
-
-    if (-not (Test-Path $ModelHostDir)) {
-        throw "Model host directory does not exist: $ModelHostDir"
-    }
-
-    $name = "localllm-llamacpp-{0}" -f ([guid]::NewGuid().ToString('N').Substring(0, 8))
-
-    $dockerArgs = @(
-        'run', '-d',
-        '--name', $name,
-        '--rm',
-        '--gpus', 'all',
-        '--cap-add', 'IPC_LOCK',
-        '-p', "${Port}:${Port}",
-        '--mount', "type=bind,source=$ModelHostDir,target=/models,readonly",
-        $Image,
-        'llama-server'
-    ) + $ServerArgs
-
-    Write-Host "docker $(($dockerArgs -join ' '))" -ForegroundColor DarkGray
-
-    $containerId = & docker @dockerArgs
-
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
-        throw "docker run failed (exit $LASTEXITCODE)."
-    }
-
-    return @{
-        ContainerId   = $containerId.Trim()
-        ContainerName = $name
-    }
-}
-
 function Stop-LlamaServer {
     [CmdletBinding()]
     param([switch]$Quiet)
@@ -148,11 +107,7 @@ function Stop-LlamaServer {
     if (-not $session) { return }
 
     try {
-        if ($session.Mode -eq 'docker' -and -not [string]::IsNullOrWhiteSpace($session.ContainerName)) {
-            if (-not $Quiet) { Write-Host "Stopping container $($session.ContainerName)..." -ForegroundColor DarkGray }
-            & docker stop $session.ContainerName *> $null
-        }
-        elseif ($session.Pid) {
+        if ($session.Pid) {
             $p = Get-Process -Id $session.Pid -ErrorAction SilentlyContinue
             if ($p -and -not $p.HasExited) {
                 if (-not $Quiet) { Write-Host "Stopping llama-server (pid $($session.Pid))..." -ForegroundColor DarkGray }
@@ -175,8 +130,7 @@ function Get-LlamaServerStatus {
     Write-Host "Backend  : $($session.Backend) ($($session.Mode))" -ForegroundColor Cyan
     Write-Host "Port     : $($session.Port)" -ForegroundColor DarkGray
     Write-Host "Base URL : $($session.BaseUrl)" -ForegroundColor DarkGray
-    if ($session.Pid)           { Write-Host "PID      : $($session.Pid)" -ForegroundColor DarkGray }
-    if ($session.ContainerName) { Write-Host "Container: $($session.ContainerName)" -ForegroundColor DarkGray }
-    if ($session.Model)         { Write-Host "Model    : $($session.Model)" -ForegroundColor DarkGray }
-    if ($session.GgufPath)      { Write-Host "GGUF     : $($session.GgufPath)" -ForegroundColor DarkGray }
+    if ($session.Pid)      { Write-Host "PID      : $($session.Pid)" -ForegroundColor DarkGray }
+    if ($session.Model)    { Write-Host "Model    : $($session.Model)" -ForegroundColor DarkGray }
+    if ($session.GgufPath) { Write-Host "GGUF     : $($session.GgufPath)" -ForegroundColor DarkGray }
 }

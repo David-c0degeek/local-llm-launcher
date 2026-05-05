@@ -46,7 +46,7 @@ function Invoke-Backend {
         [Parameter(Mandatory = $true)][ValidateSet('ollama', 'llamacpp')][string]$Backend,
         [string]$Key,
         [AllowEmptyString()][string]$ContextKey = '',
-        [ValidateSet('native', 'docker')][string]$LlamaCppMode,
+        [ValidateSet('native', 'turboquant')][string]$LlamaCppMode,
         [string]$KvCacheK,
         [string]$KvCacheV,
         [switch]$UseQ8,

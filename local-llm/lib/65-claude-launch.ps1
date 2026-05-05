@@ -343,7 +343,7 @@ function Start-ClaudeWithLlamaCppModel {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [Parameter(Mandatory = $true)][ValidateSet('native', 'docker')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
         [string]$KvCacheK,
         [string]$KvCacheV,
         [string]$Tools,
@@ -385,15 +385,8 @@ function Start-ClaudeWithLlamaCppModel {
     $defaultPort = if ($script:Cfg.Contains('LlamaCppPort')) { [int]$script:Cfg.LlamaCppPort } else { 8080 }
     $port = Find-LlamaCppFreePort -StartPort $defaultPort
 
-    # Build argv. Native uses the host path; Docker rewrites to /models/<file>.
-    if ($Mode -eq 'docker') {
-        $modelHostDir = Split-Path -Parent $ggufPath
-        $modelFile = Split-Path -Leaf $ggufPath
-        $modelArgPath = "/models/$modelFile"
-    } else {
-        $modelHostDir = $null
-        $modelArgPath = $ggufPath
-    }
+    # Both modes are native processes — same path semantics.
+    $modelArgPath = $ggufPath
 
     $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
 
@@ -409,29 +402,23 @@ function Start-ClaudeWithLlamaCppModel {
         -Strict:$Strict `
         -ExtraArgs $ExtraArgs
 
-    # Spin up the server.
-    $session = @{
-        Backend       = 'llamacpp'
-        Mode          = $Mode
-        Port          = $port
-        BaseUrl       = "http://localhost:$port"
-        Model         = $def.Root
-        GgufPath      = $ggufPath
-        Pid           = $null
-        ContainerName = $null
-        ContainerId   = $null
+    # Resolve the server binary based on mode (upstream vs turboquant fork).
+    $serverPath = if ($Mode -eq 'turboquant') {
+        Ensure-LlamaServerTurboquant
+    } else {
+        Ensure-LlamaServerNative
     }
 
-    if ($Mode -eq 'docker') {
-        Ensure-LlamaCppDocker | Out-Null
-        $image = $script:Cfg.LlamaCppDockerImage
-        $containerInfo = Start-LlamaServerDocker -Image $image -ModelHostDir $modelHostDir -Port $port -ServerArgs $serverArgs
-        $session.ContainerId   = $containerInfo.ContainerId
-        $session.ContainerName = $containerInfo.ContainerName
-    } else {
-        $serverPath = Ensure-LlamaServerNative
-        $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs
-        $session.Pid = $proc.Id
+    $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs
+
+    $session = @{
+        Backend  = 'llamacpp'
+        Mode     = $Mode
+        Port     = $port
+        BaseUrl  = "http://localhost:$port"
+        Model    = $def.Root
+        GgufPath = $ggufPath
+        Pid      = $proc.Id
     }
 
     Set-CurrentBackendSession -Session $session
