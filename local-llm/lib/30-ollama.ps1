@@ -2,6 +2,13 @@
 # the `ollama` CLI; doesn't know about model defs.
 
 function Get-OllamaLoadedModels {
+    # Daemon-down fast path: nothing to list when the server isn't running.
+    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { return @() }
+
+    # Test-OllamaReachable is defined later in this file; we're inside a
+    # function body so the forward reference is resolved at call time.
+    if (-not (Test-OllamaReachable)) { return @() }
+
     $lines = & ollama ps 2>$null | Select-Object -Skip 1
     $items = @()
 
@@ -121,9 +128,38 @@ function Test-OllamaModelExists {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Test-OllamaReachable {
+    # Fast non-blocking probe of the Ollama daemon's TCP port. Returns $true
+    # if 127.0.0.1:11434 accepts a connection within the timeout. Used to
+    # short-circuit `ollama list` calls that would otherwise hang for many
+    # seconds when the daemon is down.
+    param([int]$TimeoutMs = 250)
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $task = $client.ConnectAsync('127.0.0.1', 11434)
+        if ($task.Wait($TimeoutMs)) {
+            return $client.Connected
+        }
+        return $false
+    }
+    catch {
+        return $false
+    }
+    finally {
+        try { $client.Close() } catch {}
+    }
+}
+
 function Get-OllamaInstalledModelNames {
     # Single-shot fetch of the installed Ollama model list.
     # Returns short names ("foo:latest" -> "foo") and the raw "name:tag" pair.
+    # Daemon-down fast path: avoids `ollama list` blocking when the server
+    # is not running (common after a llama.cpp launch stopped it).
+    if (-not (Test-OllamaReachable)) {
+        return @()
+    }
+
     $lines = & ollama list 2>$null | Select-Object -Skip 1
     $names = New-Object System.Collections.Generic.List[string]
 
