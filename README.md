@@ -422,11 +422,14 @@ Use the helper instead of editing JSON:
 Set-LocalLLMSetting UnshackledRoot 'C:\repos\unshackled'
 Set-LocalLLMSetting Default q36plus
 Set-LocalLLMSetting KeepAlive '5m'
-Set-LocalLLMSetting VRAMGB 32              # override auto-detect
-Set-LocalLLMSetting Q8KvMaxContext 196608  # pin the -Q8 ceiling
+Set-LocalLLMSetting VRAMGB 32                        # override auto-detect
+Set-LocalLLMSetting Q8KvMaxContext 196608            # pin the -Q8 ceiling
 Set-LocalLLMSetting LlamaCppDefaultMode native       # or 'turboquant'
 Set-LocalLLMSetting LlamaCppCoexistOllama $true      # rare: allow both backends concurrently
-Set-LocalLLMSetting UnshackledRoot $null   # remove an entry
+Set-LocalLLMSetting LlamaCppNCpuMoe 35               # MoE expert CPU offload (default 35; 0 to disable)
+Set-LocalLLMSetting LlamaCppMlock $false             # disable RAM locking (default $true)
+Set-LocalLLMSetting LlamaCppNoMmap $false            # disable no-mmap (default $true)
+Set-LocalLLMSetting UnshackledRoot $null             # remove an entry
 ```
 
 The `Models` and `CommandAliases` keys are catalog-only and rejected by

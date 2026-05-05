@@ -64,6 +64,9 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppDefaultMode"))           { $cfg.LlamaCppDefaultMode = "native" }
     if (-not $cfg.ContainsKey("LlamaCppHealthCheckTimeoutSec")) { $cfg.LlamaCppHealthCheckTimeoutSec = 120 }
     if (-not $cfg.ContainsKey("LlamaCppCoexistOllama"))         { $cfg.LlamaCppCoexistOllama = $false }
+    if (-not $cfg.ContainsKey("LlamaCppNCpuMoe"))               { $cfg.LlamaCppNCpuMoe = 35 }
+    if (-not $cfg.ContainsKey("LlamaCppMlock"))                 { $cfg.LlamaCppMlock = $true }
+    if (-not $cfg.ContainsKey("LlamaCppNoMmap"))                { $cfg.LlamaCppNoMmap = $true }
 
     # Drop the obsolete docker-image setting if a stale settings.json or
     # catalog still carries it.

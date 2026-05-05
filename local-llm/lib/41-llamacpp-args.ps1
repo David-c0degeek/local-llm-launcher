@@ -103,23 +103,26 @@ function Build-LlamaServerArgs {
     $argList.Add('-ngl')                  | Out-Null
     $argList.Add([string]$NGpuLayers)     | Out-Null
 
-    # MoE CPU offload (Qwen3 MoE etc.). Only emit when set explicitly.
+    # MoE CPU offload (Qwen3 MoE etc.). Per-call > per-model > $script:Cfg.LlamaCppNCpuMoe.
     if (-not $PSBoundParameters.ContainsKey('NCpuMoe')) {
-        if ($Def.Contains('NCpuMoe') -and $null -ne $Def.NCpuMoe) {
-            try { $NCpuMoe = [int]$Def.NCpuMoe } catch { $NCpuMoe = 0 }
-        }
+        $NCpuMoe = if ($Def.Contains('NCpuMoe') -and $null -ne $Def.NCpuMoe) {
+            try { [int]$Def.NCpuMoe } catch { [int]$script:Cfg.LlamaCppNCpuMoe }
+        } else { [int]$script:Cfg.LlamaCppNCpuMoe }
     }
     if ($NCpuMoe -gt 0) {
         $argList.Add('--n-cpu-moe')         | Out-Null
         $argList.Add([string]$NCpuMoe)      | Out-Null
     }
 
-    # mlock / no-mmap toggles — RAM behaviour. Per-model defaults are honored
-    # only when the caller didn't pass an explicit value.
-    if ($null -eq $Mlock -and $Def.Contains('Mlock')) { $Mlock = [bool]$Def.Mlock }
+    # mlock / no-mmap. Per-call > per-model > $script:Cfg.LlamaCppMlock / LlamaCppNoMmap.
+    if ($null -eq $Mlock) {
+        $Mlock = if ($Def.Contains('Mlock')) { [bool]$Def.Mlock } else { [bool]$script:Cfg.LlamaCppMlock }
+    }
     if ($Mlock) { $argList.Add('--mlock') | Out-Null }
 
-    if ($null -eq $NoMmap -and $Def.Contains('NoMmap')) { $NoMmap = [bool]$Def.NoMmap }
+    if ($null -eq $NoMmap) {
+        $NoMmap = if ($Def.Contains('NoMmap')) { [bool]$Def.NoMmap } else { [bool]$script:Cfg.LlamaCppNoMmap }
+    }
     if ($NoMmap) { $argList.Add('--no-mmap') | Out-Null }
 
     # KV cache types (validated against mode).
