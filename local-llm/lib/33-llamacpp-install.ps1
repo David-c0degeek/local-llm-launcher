@@ -321,8 +321,48 @@ function Install-LlamaServerTurboquant {
 
     "$($release.tag_name)" | Set-Content -LiteralPath (Join-Path $installRoot ".build-stamp") -Encoding utf8
 
+    Repair-TurboquantOpenSslDeps -InstallDir (Split-Path -Parent $serverPath)
+
     Write-Host "Installed turboquant llama-server: $serverPath" -ForegroundColor Green
     return $serverPath
+}
+
+function Repair-TurboquantOpenSslDeps {
+    # Some turboquant builds link OpenSSL but ship without libcrypto/libssl/zlib.
+    # If the install dir is missing them, copy from common system locations
+    # (Git for Windows is the reliable bet on most dev machines). Idempotent:
+    # files already present are left alone.
+    param([Parameter(Mandatory = $true)][string]$InstallDir)
+
+    $needed = @('libcrypto-3-x64.dll', 'libssl-3-x64.dll', 'zlib1.dll')
+
+    $missing = @($needed | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) })
+    if ($missing.Count -eq 0) { return }
+
+    $sourceDirs = @(
+        (Join-Path ${env:ProgramFiles}      'Git\mingw64\bin'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Git\mingw64\bin'),
+        (Join-Path ${env:ProgramFiles}      'OpenSSL-Win64\bin'),
+        (Join-Path ${env:ProgramFiles}      'OpenSSL\bin')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) }
+
+    foreach ($dll in $missing) {
+        $copied = $false
+        foreach ($dir in $sourceDirs) {
+            $src = Join-Path $dir $dll
+            if (Test-Path $src) {
+                Copy-Item -LiteralPath $src -Destination $InstallDir -Force -ErrorAction SilentlyContinue
+                if (Test-Path (Join-Path $InstallDir $dll)) {
+                    Write-Host "Copied missing dependency $dll from $dir" -ForegroundColor DarkGreen
+                    $copied = $true
+                    break
+                }
+            }
+        }
+        if (-not $copied) {
+            Write-Warning "Could not locate $dll. Install Git for Windows or copy the DLL manually into $InstallDir."
+        }
+    }
 }
 
 function Ensure-LlamaServerTurboquant {
@@ -331,7 +371,10 @@ function Ensure-LlamaServerTurboquant {
     param([switch]$NonInteractive)
 
     $existing = Find-TurboquantServerExe
-    if ($existing) { return $existing }
+    if ($existing) {
+        Repair-TurboquantOpenSslDeps -InstallDir (Split-Path -Parent $existing)
+        return $existing
+    }
 
     if ($NonInteractive) {
         return Install-LlamaServerTurboquant
