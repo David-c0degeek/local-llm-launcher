@@ -120,6 +120,29 @@ function Stop-LlamaServer {
     }
 }
 
+function Stop-AllLlamaServers {
+    # Reap every llama-server.exe process — useful when a previous shell
+    # crashed without running its `finally` cleanup, leaving the GPU pinned.
+    # Includes the tracked session, so you don't need to call Stop-LlamaServer
+    # first.
+    [CmdletBinding()]
+    param([switch]$Quiet)
+
+    $procs = Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue
+    if (-not $procs) {
+        if (-not $Quiet) { Write-Host "No llama-server processes running." -ForegroundColor DarkGray }
+        Clear-CurrentBackendSession
+        return
+    }
+
+    foreach ($p in $procs) {
+        if (-not $Quiet) { Write-Host "Stopping llama-server (pid $($p.Id))..." -ForegroundColor DarkGray }
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    Clear-CurrentBackendSession
+}
+
 function Get-LlamaServerStatus {
     $session = Get-CurrentBackendSession
     if (-not $session) {

@@ -131,6 +131,16 @@ function Remove-LlamaCppOrphanContainers {
     }
 }
 
+function Unload-LocalLLM {
+    # Frees all VRAM by stopping every local LLM backend we know about.
+    # Unlike Teardown-Ollama, this does NOT restart Ollama afterwards — it
+    # leaves both backends idle so the GPU is available for something else.
+    Stop-OllamaModels
+    Stop-OllamaApp
+    Reset-OllamaEnv
+    Stop-AllLlamaServers
+}
+
 function Teardown-Ollama {
     param([switch]$DeleteFiles)
 
