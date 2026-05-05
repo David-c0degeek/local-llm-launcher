@@ -201,7 +201,8 @@ function Start-ClaudeWithOllamaModel {
         [switch]$UseQ8,
         [switch]$LimitTools,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
-        [switch]$SkipToolCheck
+        [switch]$SkipToolCheck,
+        [string[]]$ExtraUnshackledArgs
     )
 
     if ([string]::IsNullOrWhiteSpace($Tools)) {
@@ -298,7 +299,7 @@ function Start-ClaudeWithOllamaModel {
         }
 
         if ($Unshackled) {
-            Invoke-UnshackledCli @launchArgs
+            Invoke-UnshackledCli @launchArgs @ExtraUnshackledArgs
         }
         else {
             & claude --model $Model @launchArgs
@@ -351,7 +352,8 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$LimitTools,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$Strict,
-        [string[]]$ExtraArgs
+        [string[]]$ExtraArgs,
+        [string[]]$ExtraUnshackledArgs
     )
 
     $def = Get-ModelDef -Key $Key
@@ -469,7 +471,7 @@ function Start-ClaudeWithLlamaCppModel {
         }
 
         if ($Unshackled) {
-            Invoke-UnshackledCli @launchArgs
+            Invoke-UnshackledCli @launchArgs @ExtraUnshackledArgs
         }
         else {
             & claude --model $def.Root @launchArgs
