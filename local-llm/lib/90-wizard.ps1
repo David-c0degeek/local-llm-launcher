@@ -109,7 +109,8 @@ function Select-LLMModelKey {
         $contexts = ($def.Contexts.Keys | ForEach-Object {
                 if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
             }) -join ", "
-        $head = "$key  ->  $($def.DisplayName)$quant | contexts: $contexts"
+        $strictBadge = if (Get-ModelStrictEnabled -Def $def) { " [strict]" } else { "" }
+        $head = "$key  ->  $($def.DisplayName)$quant | contexts: $contexts$strictBadge"
 
         $description = Get-ModelDescription -Def $def
         if ([string]::IsNullOrWhiteSpace($description)) {
@@ -335,6 +336,24 @@ function Read-LLMQ8Toggle {
     }
 }
 
+function Read-LLMStrictToggle {
+    # Returns $true (strict on), $false (strict off), or $null (back).
+    # Only meaningful when the selected model has Strict: true in the catalog;
+    # the wizard gates this prompt on Get-ModelStrictEnabled.
+    while ($true) {
+        Write-Host ""
+        Write-Host "Strict mode launches the <root>-strict alias (overlay system prompt + tightened sampling)." -ForegroundColor DarkGray
+        Write-Host "Strict pins to the model's strict-base context, so context selection is skipped." -ForegroundColor DarkGray
+        $answer = (Read-Host "Use strict mode? [y/N/b=back]").Trim().ToLowerInvariant()
+
+        if ([string]::IsNullOrWhiteSpace($answer) -or $answer -in @("n", "no")) { return $false }
+        if ($answer -in @("y", "yes")) { return $true }
+        if ($answer -in @("b", "back")) { return $null }
+
+        Write-Host "Answer y, n, or b." -ForegroundColor Red
+    }
+}
+
 function Invoke-LLMSelection {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -344,7 +363,8 @@ function Invoke-LLMSelection {
         [string]$LlamaCppMode,
         [string]$KvCacheK,
         [string]$KvCacheV,
-        [switch]$UseQ8
+        [switch]$UseQ8,
+        [switch]$Strict
     )
 
     if ($Backend -eq 'llamacpp') {
@@ -355,17 +375,18 @@ function Invoke-LLMSelection {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools)
+                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict
             }
 
             "fc" {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Unshackled
+                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict
             }
 
             "setup" {
+                # Strict has no effect on the GGUF path — same file regardless.
                 $path = Get-ModelGgufPath -Key $ModelKey -Def $def -Backend llamacpp
                 Write-Host "GGUF cached at: $path" -ForegroundColor Green
             }
@@ -377,32 +398,32 @@ function Invoke-LLMSelection {
         return
     }
 
-    # Ollama backend (existing behaviour).
+    # Ollama backend.
     switch ($Action) {
         "chat" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Chat -UseQ8:$UseQ8
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Chat -UseQ8:$UseQ8 -Strict:$Strict
         }
 
         "fc" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8 -Strict:$Strict
         }
 
         "claude" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -UseQ8:$UseQ8
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -UseQ8:$UseQ8 -Strict:$Strict
         }
 
         "benchmark" {
-            $modelName = Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey
+            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey }
             Test-OllamaSpeed -Model $modelName -Runs 3
         }
 
         "setup" {
-            $modelName = Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey -ForceRebuild
+            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey -ForceRebuild } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey -ForceRebuild }
             Write-Host "Created/rebuilt alias: $modelName" -ForegroundColor Green
         }
 
         "show" {
-            $modelName = Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey
+            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey }
             & ollama show $modelName
         }
 
@@ -417,6 +438,7 @@ function Start-LLMWizardClassic {
     $contextKey   = $null
     $action       = $null
     $useQ8        = $false
+    $useStrict    = $false
     $backend      = 'ollama'
     $llamaCppMode = $null
     $kvK          = $null
@@ -433,6 +455,7 @@ function Start-LLMWizardClassic {
                 $modelKey = Select-LLMModelKey
                 if ([string]::IsNullOrWhiteSpace($modelKey)) { return }
 
+                $useStrict = $false
                 $step = 'quant'
             }
 
@@ -459,13 +482,30 @@ function Start-LLMWizardClassic {
                     'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
                     'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
                 }
-                $step = 'context'
+                $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
+            }
+
+            'strict' {
+                $strict = Read-LLMStrictToggle
+                if ($null -eq $strict) { $step = 'backend'; break }   # back
+                $useStrict = [bool]$strict
+
+                if ($useStrict) {
+                    # Strict pins context to Get-ModelStrictBaseContextKey via the
+                    # alias build; the empty contextKey is correct here because the
+                    # shortcut layer rejects -Strict + -Ctx together.
+                    $contextKey = ""
+                    $step = 'action'
+                } else {
+                    $step = 'context'
+                }
             }
 
             'context' {
                 $contextKey = Select-LLMContextKey -ModelKey $modelKey
                 if ($null -eq $contextKey) {
-                    $step = 'backend'
+                    $def = Get-ModelDef -Key $modelKey
+                    $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'backend' }
                     break
                 }
                 $step = 'action'
@@ -473,7 +513,10 @@ function Start-LLMWizardClassic {
 
             'action' {
                 $action = Select-LLMAction -Backend $backend
-                if ([string]::IsNullOrWhiteSpace($action)) { $step = 'context'; break }
+                if ([string]::IsNullOrWhiteSpace($action)) {
+                    $step = if ($useStrict) { 'strict' } else { 'context' }
+                    break
+                }
                 if ($action -in @("chat", "fc", "claude")) {
                     $step = if ($backend -eq 'llamacpp') { 'kvcache' } else { 'q8' }
                 } else {
@@ -500,7 +543,7 @@ function Start-LLMWizardClassic {
                 try {
                     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
                         -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict
                 }
                 catch {
                     Write-Host "Command failed." -ForegroundColor Red
@@ -546,7 +589,8 @@ function Select-LLMModelKeySpectre {
     $labelMap = [ordered]@{}
     foreach ($key in $keys) {
         $def = Get-ModelDef -Key $key
-        $label = "{0}  ·  {1}" -f (ConvertTo-LocalLLMSpectreSafe $key), (ConvertTo-LocalLLMSpectreSafe $def.DisplayName)
+        $strictBadge = if (Get-ModelStrictEnabled -Def $def) { '  [grey50][[strict]][/]' } else { '' }
+        $label = "{0}  ·  {1}{2}" -f (ConvertTo-LocalLLMSpectreSafe $key), (ConvertTo-LocalLLMSpectreSafe $def.DisplayName), $strictBadge
         $labelMap[$label] = $key
     }
     if (-not $All) { $labelMap["[[Show all tiers]]"] = '__all__' }
@@ -727,6 +771,20 @@ function Read-LLMQ8ToggleSpectre {
     return [bool]$value
 }
 
+function Read-LLMStrictToggleSpectre {
+    # Returns $true (strict on), $false (strict off), or $null (back).
+    $choices = [ordered]@{
+        'No  -  base alias, normal context selection'                 = $false
+        'Yes -  <root>-strict alias (overlay prompt, pinned context)' = $true
+        '[[Back]]'                                                    = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Use strict mode? (skips context selection when on)" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return $null }
+    $value = $choices[$chosen]
+    if ($value -eq '__back__') { return $null }
+    return [bool]$value
+}
+
 function Get-LocalLLMErrorLogPath {
     $dir = Join-Path $HOME ".local-llm"
     if (-not (Test-Path $dir)) {
@@ -796,6 +854,7 @@ function Start-LLMWizardSpectre {
     $contextKey   = $null
     $action       = $null
     $useQ8        = $false
+    $useStrict    = $false
     $backend      = 'ollama'
     $llamaCppMode = $null
     $kvK          = $null
@@ -813,6 +872,7 @@ function Start-LLMWizardSpectre {
                 }
                 if ([string]::IsNullOrWhiteSpace($modelKey)) { return }
 
+                $useStrict = $false
                 $step = 'quant'
             }
 
@@ -851,14 +911,33 @@ function Start-LLMWizardSpectre {
                     'llamacpp-native'     { $backend = 'llamacpp'; $llamaCppMode = 'native' }
                     'llamacpp-turboquant' { $backend = 'llamacpp'; $llamaCppMode = 'turboquant' }
                 }
-                $step = 'context'
+                $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'context' }
+            }
+
+            'strict' {
+                $strict = Invoke-LLMWizardStep -Context "strict-toggle ($modelKey)" -Default $null -Action {
+                    Read-LLMStrictToggleSpectre
+                }
+                if ($null -eq $strict) { $step = 'backend'; break }
+                $useStrict = [bool]$strict
+
+                if ($useStrict) {
+                    $contextKey = ""
+                    $step = 'action'
+                } else {
+                    $step = 'context'
+                }
             }
 
             'context' {
                 $contextKey = Invoke-LLMWizardStep -Context "select-context ($modelKey)" -Action {
                     Select-LLMContextKeySpectre -ModelKey $modelKey
                 }
-                if ($null -eq $contextKey) { $step = 'backend'; break }
+                if ($null -eq $contextKey) {
+                    $def = Get-ModelDef -Key $modelKey
+                    $step = if (Get-ModelStrictEnabled -Def $def) { 'strict' } else { 'backend' }
+                    break
+                }
                 $step = 'action'
             }
 
@@ -867,7 +946,10 @@ function Start-LLMWizardSpectre {
                 $action = Invoke-LLMWizardStep -Context 'select-action' -Action {
                     Select-LLMActionSpectre -Backend $captured
                 }
-                if ([string]::IsNullOrWhiteSpace($action)) { $step = 'context'; break }
+                if ([string]::IsNullOrWhiteSpace($action)) {
+                    $step = if ($useStrict) { 'strict' } else { 'context' }
+                    break
+                }
                 if ($action -in @("chat", "fc", "claude")) {
                     $step = if ($backend -eq 'llamacpp') { 'kvcache' } else { 'q8' }
                 } else {
@@ -899,10 +981,10 @@ function Start-LLMWizardSpectre {
                 try {
                     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
                         -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict
                 }
                 catch {
-                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend)"
+                    Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend/strict=$useStrict)"
                     Pause-Menu
                 }
                 $step = 'model'
