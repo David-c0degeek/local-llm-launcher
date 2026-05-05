@@ -759,6 +759,10 @@ function Select-LLMKvCacheSpectre {
 
 function Read-LLMQ8ToggleSpectre {
     # Returns $true (q8 on), $false (q8 off), or $null (back).
+    # Important: check the label string for back BEFORE looking up the boolean
+    # value. PowerShell's `-eq` coerces the right operand to the left's type;
+    # `$true -eq '__back__'` evaluates to $true (non-empty string -> $true),
+    # so a value-side back check would falsely fire on the Yes branch.
     $choices = [ordered]@{
         'No  -  default'    = $false
         'Yes -  q8 KV cache' = $true
@@ -766,13 +770,14 @@ function Read-LLMQ8ToggleSpectre {
     }
     $chosen = Read-SpectreSelection -Message "Use q8 KV cache?" -Choices @($choices.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
-    $value = $choices[$chosen]
-    if ($value -eq '__back__') { return $null }
-    return [bool]$value
+    if ($chosen -eq '[[Back]]') { return $null }
+    return [bool]$choices[$chosen]
 }
 
 function Read-LLMStrictToggleSpectre {
     # Returns $true (strict on), $false (strict off), or $null (back).
+    # See Read-LLMQ8ToggleSpectre for why the back check is on $chosen, not
+    # on the looked-up value.
     $choices = [ordered]@{
         'No  -  base alias, normal context selection'                 = $false
         'Yes -  <root>-strict alias (overlay prompt, pinned context)' = $true
@@ -780,9 +785,8 @@ function Read-LLMStrictToggleSpectre {
     }
     $chosen = Read-SpectreSelection -Message "Use strict mode? (skips context selection when on)" -Choices @($choices.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
-    $value = $choices[$chosen]
-    if ($value -eq '__back__') { return $null }
-    return [bool]$value
+    if ($chosen -eq '[[Back]]') { return $null }
+    return [bool]$choices[$chosen]
 }
 
 function Get-LocalLLMErrorLogPath {
