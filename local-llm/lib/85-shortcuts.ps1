@@ -1,6 +1,7 @@
 # Per-model shortcut function generator. For every catalog entry we bind a
 # global function (named after the model's Root or ShortName) that takes
-# -Ctx / -Q8 / -Fc / -Chat / -Quant flags and dispatches to Invoke-ModelShortcut.
+# -Ctx / -Q8 / -Fc / -Chat / -Strict / -Quant flags and dispatches to
+# Invoke-ModelShortcut.
 
 function Invoke-ModelShortcut {
     param(
@@ -8,25 +9,45 @@ function Invoke-ModelShortcut {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [switch]$UseQ8,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
-        [switch]$Chat
+        [switch]$Chat,
+        [switch]$Strict,
+        [string[]]$ExtraUnshackledArgs
     )
 
     $def = Get-ModelDef -Key $Key
 
-    if ($UseQ8) {
-        $numCtx = Get-ModelContextValue -Def $def -ContextKey $ContextKey
-        $maxQ8 = Get-Q8KvMaxContext
+    if ($Strict) {
+        if (-not (Get-ModelStrictEnabled -Def $def)) {
+            throw "Model '$Key' has Strict=false in the catalog; no strict sibling alias is built. Re-import via addllm and answer Yes to the strict prompt, or drop -Strict."
+        }
 
-        if ($numCtx -gt $maxQ8) {
-            $ctxLabel = if ([string]::IsNullOrWhiteSpace($ContextKey)) { "default" } else { $ContextKey }
-            $vramInfo = Get-LocalLLMVRAMInfo
-            throw ("Refusing -Q8 with -Ctx $ctxLabel ($numCtx tokens). " +
-                   "q8_0 KV cache at this length exceeds the ceiling for this host ($($vramInfo.GB) GB VRAM, $($vramInfo.Source); Q8KvMaxContext=$maxQ8). " +
-                   "Drop -Q8 (q4_0 KV is the default), pick a smaller -Ctx, or raise the ceiling: Set-LocalLLMSetting Q8KvMaxContext <tokens>")
+        if (-not [string]::IsNullOrWhiteSpace($ContextKey)) {
+            throw "-Strict and -Ctx are mutually exclusive. Strict siblings are pinned to the model's strict-base context; drop -Ctx."
         }
     }
 
-    $modelName = Ensure-ModelAlias -Key $Key -ContextKey $ContextKey
+    # Q8 KV check sizes against the context that will actually be used. Strict
+    # siblings derive their num_ctx from Get-ModelStrictBaseContextKey, not the
+    # caller-supplied -Ctx (which is rejected above).
+    if ($UseQ8) {
+        $q8CtxKey = if ($Strict) { Get-ModelStrictBaseContextKey -Def $def } else { $ContextKey }
+        $numCtx = Get-ModelContextValue -Def $def -ContextKey $q8CtxKey
+        $maxQ8 = Get-Q8KvMaxContext
+
+        if ($numCtx -gt $maxQ8) {
+            $ctxLabel = if ([string]::IsNullOrWhiteSpace($q8CtxKey)) { "default" } else { $q8CtxKey }
+            $vramInfo = Get-LocalLLMVRAMInfo
+            throw ("Refusing -Q8 with -Ctx $ctxLabel ($numCtx tokens). " +
+                   "q8_0 KV cache at this length exceeds the ceiling for this host ($($vramInfo.GB) GB VRAM, $($vramInfo.Source); Q8KvMaxContext=$maxQ8). " +
+                   "Drop -Q8 (pick a smaller -Ctx, drop -Strict, or raise the ceiling: Set-LocalLLMSetting Q8KvMaxContext <tokens>)")
+        }
+    }
+
+    $modelName = if ($Strict) {
+        Ensure-ModelStrictAlias -Key $Key
+    } else {
+        Ensure-ModelAlias -Key $Key -ContextKey $ContextKey
+    }
 
     if ($Chat) {
         Start-OllamaChat -Model $modelName -UseQ8:$UseQ8
@@ -56,6 +77,10 @@ function Invoke-ModelShortcut {
 
     if ($def.Contains("IncludeInlineToolSchemas")) {
         $startArgs.IncludeInlineToolSchemas = [bool]$def.IncludeInlineToolSchemas
+    }
+
+    if ($ExtraUnshackledArgs) {
+        $startArgs.ExtraUnshackledArgs = $ExtraUnshackledArgs
     }
 
     Start-ClaudeWithOllamaModel @startArgs
@@ -124,7 +149,8 @@ function Register-ModelShortcuts {
                     [string]$Quant,
                     [Alias("Fc", "FreeCode")][switch]$Unshackled,
                     [switch]$Chat,
-                    [switch]$Q8
+                    [switch]$Q8,
+                    [switch]$Strict
                 )
 
                 if ($Quant) {
@@ -132,7 +158,7 @@ function Register-ModelShortcuts {
                     return
                 }
 
-                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -UseQ8:$Q8 -Unshackled:$Unshackled -Chat:$Chat
+                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -UseQ8:$Q8 -Unshackled:$Unshackled -Chat:$Chat -Strict:$Strict
             }.GetNewClosure())
     }
 
@@ -229,6 +255,16 @@ function Get-DefaultModelKey {
     throw "No default model: create a .llm-default file in this workspace, set 'Default' in llm-models.json, or add a recommended model."
 }
 
-function llmdefault     { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" }
-function llmdefaultfc   { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Unshackled }
+function llmdefault {
+    [CmdletBinding()]
+    param([switch]$Strict)
+    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Strict:$Strict
+}
+
+function llmdefaultfc {
+    [CmdletBinding()]
+    param([switch]$Strict)
+    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Unshackled -Strict:$Strict
+}
+
 function llmdefaultchat { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Chat }

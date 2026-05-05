@@ -53,7 +53,8 @@ function Invoke-Backend {
         [switch]$LimitTools,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$Strict,
-        [string[]]$ExtraArgs
+        [string[]]$ExtraArgs,
+        [string[]]$ExtraUnshackledArgs
     )
 
     if ($Action -eq 'stop') {
@@ -87,7 +88,7 @@ function Invoke-Backend {
         'launch-claude' {
             switch ($Backend) {
                 'ollama' {
-                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Unshackled:$Unshackled
+                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Unshackled:$Unshackled -Strict:$Strict -ExtraUnshackledArgs $ExtraUnshackledArgs
                 }
                 'llamacpp' {
                     $mode = Resolve-LlamaCppMode -Mode $LlamaCppMode
@@ -100,7 +101,8 @@ function Invoke-Backend {
                         -LimitTools:$LimitTools `
                         -Unshackled:$Unshackled `
                         -Strict:$Strict `
-                        -ExtraArgs $ExtraArgs
+                        -ExtraArgs $ExtraArgs `
+                        -ExtraUnshackledArgs $ExtraUnshackledArgs
                 }
             }
         }
