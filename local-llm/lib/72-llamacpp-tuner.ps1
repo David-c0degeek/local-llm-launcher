@@ -1037,6 +1037,84 @@ function Get-LlamaCppBestConfigCandidates {
     })
 }
 
+function Remove-LlamaCppBestConfig {
+    # Deletes saved best-config entries for the current local target. Used by
+    # the wizard's reset action before re-tuning.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [string]$Quant,
+        [int]$VramGB,
+        [ValidateSet('short','long')][string]$PromptLength,
+        [switch]$AllPromptLengths
+    )
+
+    if (-not $VramGB) { $VramGB = Get-LocalLLMVRAMGB }
+    if ([string]::IsNullOrWhiteSpace($Quant)) {
+        $def = Get-ModelDef -Key $Key
+        if ($def.Contains('Quant')) { $Quant = [string]$def.Quant }
+    }
+
+    $path = Get-LlamaCppTunerBestFile -Key $Key
+    if (-not (Test-Path $path)) {
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false }
+    }
+
+    $data = $null
+    try { $data = Get-Content -Raw -Path $path | ConvertFrom-Json -AsHashtable }
+    catch {
+        throw "Could not read saved best settings from $path. $($_.Exception.Message)"
+    }
+
+    if (-not $data -or -not $data.Contains('entries')) {
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false }
+    }
+
+    $kept = @()
+    $removed = 0
+    foreach ($entry in @($data.entries)) {
+        $entryPromptLength = if ($entry.prompt_length) { [string]$entry.prompt_length } else { 'short' }
+        $vramMatches = $entry.vramGB -and ([Math]::Abs([int]$entry.vramGB - [int]$VramGB) -le 1)
+        $promptMatches = if ($AllPromptLengths -or [string]::IsNullOrWhiteSpace($PromptLength)) {
+            $true
+        } else {
+            $entryPromptLength -eq $PromptLength
+        }
+
+        $matches = (
+            $entry.contextKey -eq $ContextKey -and
+            $entry.mode -eq $Mode -and
+            $vramMatches -and
+            $promptMatches -and
+            ([string]::IsNullOrWhiteSpace($Quant) -or $entry.quant -eq $Quant)
+        )
+
+        if ($matches) {
+            $removed++
+        } else {
+            $kept += $entry
+        }
+    }
+
+    if ($removed -le 0) {
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = @($data.entries).Count; DeletedFile = $false }
+    }
+
+    if ($kept.Count -eq 0) {
+        Remove-Item -LiteralPath $path -Force
+        return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = 0; DeletedFile = $true }
+    }
+
+    $data.entries = $kept
+    $json = $data | ConvertTo-Json -Depth 8
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
+
+    return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = $kept.Count; DeletedFile = $false }
+}
+
 function Test-LlamaCppBestConfigStale {
     [CmdletBinding()]
     param(

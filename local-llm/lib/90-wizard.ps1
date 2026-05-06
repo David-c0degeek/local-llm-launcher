@@ -195,6 +195,7 @@ function Select-LLMAction {
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
             [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
             [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
+            [pscustomobject]@{ Key = "resetbest"; Label = "Delete best settings"; Description = "Reset saved AutoBest config" },
             [pscustomobject]@{ Key = "setup"; Label = "Download GGUF only"; Description = "Resolve and cache the GGUF without launching" }
         )
     } else {
@@ -371,6 +372,25 @@ function Read-LLMYesNo {
     }
 }
 
+function Read-LLMTuneDepth {
+    $items = @(
+        [pscustomobject]@{ Key = 'normal'; Label = 'Normal'; Description = 'Default tuner pass, budget 30' },
+        [pscustomobject]@{ Key = 'deep';   Label = 'Deep';   Description = 'Normal pass plus finer local refinement, budget 60 unless overridden' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Tune depth" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
+
+    if ($idx -lt 0) { return $null }
+    return [string]$items[$idx].Key
+}
+
 function Invoke-LlamaCppTunerWizardFlow {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -378,6 +398,14 @@ function Invoke-LlamaCppTunerWizardFlow {
         [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
         [switch]$UseSpectrePrompts
     )
+
+    $depth = if ($UseSpectrePrompts) {
+        Read-LLMTuneDepthSpectre
+    } else {
+        Read-LLMTuneDepth
+    }
+    if ([string]::IsNullOrWhiteSpace($depth)) { return }
+    $useDeep = $depth -eq 'deep'
 
     $allowKv = if ($UseSpectrePrompts) {
         Read-LLMTuneKvVariationSpectre
@@ -396,7 +424,7 @@ function Invoke-LlamaCppTunerWizardFlow {
         }
     }
 
-    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AllowedKvTypes $allowedKvTypes -NoSave
+    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AllowedKvTypes $allowedKvTypes -Deep:$useDeep -NoSave
 
     Write-Host ""
     Write-Host "Best tuner result:" -ForegroundColor Green
@@ -426,6 +454,45 @@ function Invoke-LlamaCppTunerWizardFlow {
     }
     if ($launchAnswer) {
         Start-ClaudeWithLlamaCppModel -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AutoBest
+    }
+}
+
+function Invoke-LlamaCppBestResetWizardFlow {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
+        [switch]$UseSpectrePrompts
+    )
+
+    $def = Get-ModelDef -Key $ModelKey
+    $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
+    $ctxLabel = if ([string]::IsNullOrWhiteSpace($ContextKey)) { 'default' } else { $ContextKey }
+    Write-Host ""
+    Write-Host "Delete saved AutoBest settings for:" -ForegroundColor Yellow
+    Write-Host "  model   : $ModelKey" -ForegroundColor DarkGray
+    Write-Host "  quant   : $quant" -ForegroundColor DarkGray
+    Write-Host "  context : $ctxLabel" -ForegroundColor DarkGray
+    Write-Host "  mode    : $Mode" -ForegroundColor DarkGray
+    Write-Host ""
+
+    $confirm = if ($UseSpectrePrompts) {
+        Read-LLMYesNoSpectre -Message "Delete matching saved best settings?"
+    } else {
+        Read-LLMYesNo -Prompt "Delete matching saved best settings?" -DefaultYes:$false
+    }
+    if (-not $confirm) { return }
+
+    $result = Remove-LlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Quant $quant -AllPromptLengths
+    if ($result.Removed -gt 0) {
+        Write-Host "Deleted $($result.Removed) saved best setting(s)." -ForegroundColor Green
+        if ($result.DeletedFile) {
+            Write-Host "Removed $($result.Path)" -ForegroundColor DarkGray
+        } else {
+            Write-Host "$($result.Remaining) saved setting(s) remain in $($result.Path)" -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Host "No matching saved best settings found." -ForegroundColor DarkGray
     }
 }
 
@@ -486,6 +553,10 @@ function Invoke-LLMSelection {
 
             "findbest" {
                 Invoke-LlamaCppTunerWizardFlow -ModelKey $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode -UseSpectrePrompts:$UseSpectrePrompts
+            }
+
+            "resetbest" {
+                Invoke-LlamaCppBestResetWizardFlow -ModelKey $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode -UseSpectrePrompts:$UseSpectrePrompts
             }
 
             default {
@@ -790,6 +861,7 @@ function Select-LLMActionSpectre {
             "Claude Code  -  Local model behind Claude Code" = 'claude'
             "Unshackled   -  Local agent via Unshackled"     = 'fc'
             "Find best settings - Auto-tune for this machine" = 'findbest'
+            "Delete best settings - Reset saved AutoBest config" = 'resetbest'
             "Setup only   -  Download GGUF without launching" = 'setup'
             "[[Back]]"                                       = '__back__'
         }
@@ -933,6 +1005,18 @@ function Read-LLMTuneKvVariationSpectre {
     $chosen = Read-SpectreSelection -Message "Allow KV cache variation? Widens the search to other types in your quality class." -Choices @($choices.Keys) -PageSize 4
     if ($null -eq $chosen) { return $false }
     return [bool]$choices[$chosen]
+}
+
+function Read-LLMTuneDepthSpectre {
+    $choices = [ordered]@{
+        'Normal - default tuner pass'                 = 'normal'
+        'Deep   - add finer local refinement'         = 'deep'
+        '[[Back]]'                                    = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Tune depth" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return $null }
+    if ($chosen -eq '[[Back]]') { return $null }
+    return [string]$choices[$chosen]
 }
 
 function Get-LocalLLMErrorLogPath {

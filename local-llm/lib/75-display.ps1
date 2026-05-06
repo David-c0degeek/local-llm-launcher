@@ -732,6 +732,8 @@ Manage
                         Auto-tune llama.cpp launch flags for this box (writes
                         ~/.local-llm/tuner/best-<key>.json). Use with
                         Start-ClaudeWithLlamaCppModel -AutoBest later.
+                        The wizard also exposes Find best settings and
+                        Delete best settings for llama.cpp models.
 
 Add or remove a model
   addllm <hf-url-or-repo> -Key <key>

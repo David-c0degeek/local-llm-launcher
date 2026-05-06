@@ -571,8 +571,11 @@ Caller-supplied `-KvCacheK` / `-KvCacheV` / `-ExtraArgs` always win over the
 saved values.
 
 In the wizard, choose the llama.cpp backend and then **Find best settings** to
-run the same tuner interactively, with prompts to widen KV variation, save the
-winner, and launch immediately with `-AutoBest`.
+run the same tuner interactively, with prompts for normal vs deep tuning, KV
+variation, saving the winner, and launching immediately with `-AutoBest`.
+Choose **Delete best settings** from the same action menu to remove saved
+AutoBest entries for the selected `(model, quant, context, backend mode, VRAM)`
+before re-tuning.
 
 After a matching best config has been saved, normal wizard launches for the
 same `(model, quant, context, backend mode, VRAM)` automatically replay it and
