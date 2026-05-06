@@ -1093,12 +1093,21 @@ function Find-BestLlamaCppConfig {
         [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
         [int]$Runs = 1,
         [switch]$Quick,
+        [switch]$Deep,
         [switch]$Aggressive,
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
         [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
         [switch]$NoSave
     )
+
+    if ($Quick -and $Deep) {
+        throw "-Quick and -Deep are mutually exclusive. Use -Quick for a bounded coarse pass, or -Deep for the wider refinement pass."
+    }
+    if ($Deep -and -not $PSBoundParameters.ContainsKey('Budget')) {
+        $Budget = 60
+        $PSBoundParameters['Budget'] = $Budget
+    }
 
     if ($PromptLengths.Count -gt 1) {
         $results = @()
@@ -1501,7 +1510,146 @@ function Find-BestLlamaCppConfig {
         }
     }
 
-    # ----- Phase 8: final verification -----
+    # ----- Phase 8: deep local refinement -----
+    if ($Deep -and $trialIndex -lt $Budget) {
+        Write-Host "  -- deep pass: refining offload, batch, flash, and CPU threads" -ForegroundColor DarkGray
+
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+        function Add-SeenOverride($ov) {
+            if (-not $ov) { return }
+            $parts = @()
+            foreach ($k in @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn')) {
+                if ($ov.Contains($k) -and $null -ne $ov[$k]) { $parts += "$k=$($ov[$k])" }
+            }
+            [void]$seen.Add(($parts -join ';'))
+        }
+        foreach ($h in $history) { Add-SeenOverride $h.overrides }
+
+        function Invoke-DeepCandidate($cand, [string]$phaseName, [string]$driverName) {
+            if ($trialIndex -ge $Budget) { return }
+            $parts = @()
+            foreach ($k in @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn')) {
+                if ($cand.Contains($k) -and $null -ne $cand[$k]) { $parts += "$k=$($cand[$k])" }
+            }
+            $sig = $parts -join ';'
+            if ($seen.Contains($sig)) { return }
+            [void]$seen.Add($sig)
+
+            if (Test-LlamaCppMonotonicityOom -Candidate $cand -History $history) {
+                Write-Host "  -- skip $phaseName $(Format-LlamaCppOverrides -Overrides $cand) (pruned)" -ForegroundColor DarkGray
+                return
+            }
+
+            $nextIndex = $trialIndex + 1
+            $t = Invoke-LlamaCppTunerTrial `
+                -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
+                -Overrides $cand -Phase $phaseName -Index $nextIndex -Runs $Runs -Driver $driverName -Optimize $Optimize
+            Set-Variable -Name trialIndex -Value $nextIndex -Scope 1
+            $history.Add($t) | Out-Null
+
+            if ($t.startup_ok -and -not $t.oom -and $t.score -gt $best.score) {
+                Set-Variable -Name best -Value @{ overrides = $cand; trial = $t; score = [double]$t.score } -Scope 1
+            }
+        }
+
+        if ($trialIndex -lt $Budget) {
+            if ($space.IsMoE) {
+                $current = if ($best.overrides.Contains('NCpuMoe')) { [int]$best.overrides.NCpuMoe } else { [int]$space.BaselineNCpuMoe }
+                $moeCandidates = foreach ($delta in @(-1, 1, -2, 2, -3, 3, -4, 4, -5, 5)) {
+                    $n = $current + $delta
+                    if ($n -ge 0 -and $n -le [int]$space.MoeUpper) { $n }
+                }
+                foreach ($n in @($moeCandidates | Select-Object -Unique)) {
+                    if ($trialIndex -ge $Budget) { break }
+                    $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{ NCpuMoe = $n }
+                    Invoke-DeepCandidate $cand 'deep_moe' (Get-PhaseDriver 'moe')
+                }
+            } else {
+                $current = if ($best.overrides.Contains('NGpuLayers')) { [int]$best.overrides.NGpuLayers } else { [int]$space.BaselineNgl }
+                if ($current -le 0) { $current = 999 }
+                if ($current -lt 999) {
+                    $nglCandidates = foreach ($delta in @(64, 32, 16, 8, 4, -4, -8, -16, -32)) {
+                        $n = $current + $delta
+                        if ($n -gt 0 -and $n -le 999) { $n }
+                    }
+                    foreach ($ngl in @($nglCandidates | Select-Object -Unique)) {
+                        if ($trialIndex -ge $Budget) { break }
+                        $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{ NGpuLayers = $ngl }
+                        Invoke-DeepCandidate $cand 'deep_ngl' (Get-PhaseDriver 'ngl')
+                    }
+                }
+            }
+        }
+
+        if ($trialIndex -lt $Budget) {
+            $currentUb = if ($best.overrides.Contains('UbatchSize') -and $best.overrides.UbatchSize) { [int]$best.overrides.UbatchSize } else { 512 }
+            $currentB  = if ($best.overrides.Contains('BatchSize')  -and $best.overrides.BatchSize)  { [int]$best.overrides.BatchSize }  else { 1024 }
+            $ubCandidates = @(
+                128, 256, 512, 1024, 2048,
+                [int]($currentUb / 2), [int]($currentUb + 256), [int]($currentUb * 2)
+            ) | Where-Object { $_ -ge 64 -and $_ -le 2048 } | Select-Object -Unique
+            $bCandidates = @(
+                512, 1024, 2048, 4096,
+                [int]($currentB / 2), [int]($currentB + 512), [int]($currentB * 2)
+            ) | Where-Object { $_ -ge 128 -and $_ -le 4096 } | Select-Object -Unique
+
+            $pairs = foreach ($ub in $ubCandidates) {
+                foreach ($b in $bCandidates) {
+                    if ($b -ge $ub) {
+                        [pscustomobject]@{
+                            Ub   = [int]$ub
+                            B    = [int]$b
+                            Cost = [Math]::Abs([int]$ub - $currentUb) + [Math]::Abs([int]$b - $currentB)
+                        }
+                    }
+                }
+            }
+            foreach ($pair in @($pairs | Sort-Object Cost, Ub, B)) {
+                if ($trialIndex -ge $Budget) { break }
+                $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{
+                    UbatchSize = [int]$pair.Ub
+                    BatchSize  = [int]$pair.B
+                }
+                Invoke-DeepCandidate $cand 'deep_batching' (Get-PhaseDriver 'batching')
+            }
+        }
+
+        if ($trialIndex -lt $Budget) {
+            foreach ($flashValue in @($true, $false)) {
+                if ($trialIndex -ge $Budget) { break }
+                $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{ FlashAttn = $flashValue }
+                Invoke-DeepCandidate $cand 'deep_flash' (Get-PhaseDriver 'flash')
+            }
+        }
+
+        if ($trialIndex -lt $Budget) {
+            $currentNCpuMoe = if ($best.overrides.Contains('NCpuMoe')) { [int]$best.overrides.NCpuMoe } elseif ($space.IsMoE) { [int]$space.BaselineNCpuMoe } else { 0 }
+            $currentNgl = if ($best.overrides.Contains('NGpuLayers')) { [int]$best.overrides.NGpuLayers } else { [int]$space.BaselineNgl }
+            if ($currentNgl -le 0) { $currentNgl = 999 }
+            $shouldTuneThreads = ($currentNCpuMoe -gt 0) -or ((-not $space.IsMoE) -and $currentNgl -lt 999)
+            if ($shouldTuneThreads) {
+                try { $logicalCores = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors }
+                catch { $logicalCores = [Environment]::ProcessorCount }
+                $threadCandidates = @(
+                    1,
+                    [int][Math]::Max(1, [Math]::Floor($logicalCores / 4)),
+                    [int][Math]::Max(1, [Math]::Floor($logicalCores / 2)),
+                    [int][Math]::Max(1, [Math]::Floor($logicalCores * 3 / 4)),
+                    [int]$logicalCores
+                ) | Select-Object -Unique
+                foreach ($threads in $threadCandidates) {
+                    if ($trialIndex -ge $Budget) { break }
+                    $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{
+                        Threads      = [int]$threads
+                        ThreadsBatch = [int]$threads
+                    }
+                    Invoke-DeepCandidate $cand 'deep_threads' (Get-PhaseDriver 'threads')
+                }
+            }
+        }
+    }
+
+    # ----- Phase 9: final verification -----
     if ($script:LlamaCppCoarseMode -ne 'server') {
         $trialIndex++
         $verified = Invoke-LlamaCppTunerTrial `
@@ -1613,6 +1761,7 @@ function findbest {
         [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
         [int]$Runs = 1,
         [switch]$Quick,
+        [switch]$Deep,
         [switch]$Aggressive,
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
@@ -1633,6 +1782,7 @@ function tunellm {
         [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
         [int]$Runs = 1,
         [switch]$Quick,
+        [switch]$Deep,
         [switch]$Aggressive,
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,

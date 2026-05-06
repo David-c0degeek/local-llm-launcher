@@ -501,6 +501,9 @@ findbest q36plus -ContextKey 256k
 # Quick mode — only baseline + n-cpu-moe + batching (~10 trials)
 findbest q36plus -ContextKey 256k -Quick
 
+# Deep mode — normal phases, then finer local offload/batch/thread refinement
+findbest q36plus -ContextKey 256k -Deep
+
 # Optimize for prompt-eval (prefill) instead of generation
 findbest q36plus -ContextKey 256k -Optimize prompt
 
@@ -539,7 +542,12 @@ server path for fidelity.
    KV variation can change generations, so widened searches are an explicit
    opt-in; the tuner runs a small perplexity sanity check and refuses a >1%
    regression unless `-AllowKvQualityRegression` is passed.
-8. **verify** — re-runs the final winner through `llama-server` when a coarse
+8. **deep** — optional (`-Deep`). Re-tests a finer local neighborhood around
+   the winning offload value, expands the batch grid up to `-ub 2048` /
+   `-b 4096`, re-checks flash-attention after batch changes, and tries a wider
+   CPU-thread set when CPU offload remains. If `-Budget` is omitted, deep mode
+   raises the budget from 30 to 60.
+9. **verify** — re-runs the final winner through `llama-server` when a coarse
    bench phase was used.
 
 OOM/failure is detected from process output; OOM-monotonicity prunes branches
