@@ -1160,7 +1160,7 @@ function Save-BestLlamaCppConfig {
     return Save-LlamaCppBestConfig @PSBoundParameters
 }
 
-function Find-BestLlamaCppConfig {
+function Find-BestLlamaCppConfigLegacy {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -1193,7 +1193,7 @@ function Find-BestLlamaCppConfig {
             $childParams = @{}
             foreach ($k in $PSBoundParameters.Keys) { $childParams[$k] = $PSBoundParameters[$k] }
             $childParams['PromptLengths'] = @($profile)
-            $results += (Find-BestLlamaCppConfig @childParams)
+            $results += (Find-BestLlamaCppConfigLegacy @childParams)
         }
         return @($results)
     }
@@ -1781,6 +1781,67 @@ function Find-BestLlamaCppConfig {
         Quant        = $quant
         PromptLength = $promptProfile
     }
+}
+
+function Find-BestLlamaCppConfig {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [ValidateSet('native','turboquant')][string]$Mode = 'native',
+        [string[]]$AllowedKvTypes,
+        [int]$Budget = 30,
+        [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
+        [int]$Runs = 1,
+        [switch]$Quick,
+        [switch]$Deep,
+        [switch]$Aggressive,
+        [switch]$AggressiveKv,
+        [switch]$AllowKvQualityRegression,
+        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
+        [switch]$NoSave
+    )
+
+    $preferBenchPilot = $true
+    if ($script:Cfg -and $script:Cfg.ContainsKey('BenchPilotPreferExternal')) {
+        $preferBenchPilot = [bool]$script:Cfg.BenchPilotPreferExternal
+    }
+
+    $allowLegacyFallback = $true
+    if ($script:Cfg -and $script:Cfg.ContainsKey('BenchPilotAllowLegacyFallback')) {
+        $allowLegacyFallback = [bool]$script:Cfg.BenchPilotAllowLegacyFallback
+    }
+
+    if ($preferBenchPilot -and (Get-Command Test-BenchPilotIntegrationAvailable -ErrorAction SilentlyContinue)) {
+        $bpStatus = Test-BenchPilotIntegrationAvailable -Quiet
+        if ($bpStatus.Available) {
+            try {
+                Write-Host "findbest: using BenchPilot ($($bpStatus.Version), $($bpStatus.Source))." -ForegroundColor Cyan
+                return Invoke-BenchPilotLauncherFindBest @PSBoundParameters
+            }
+            catch {
+                $trialsStarted = $false
+                if ($_.Exception -and $_.Exception.Data -and $_.Exception.Data.Contains('BenchPilotTrialsStarted')) {
+                    try { $trialsStarted = [bool]$_.Exception.Data['BenchPilotTrialsStarted'] } catch { $trialsStarted = $false }
+                }
+
+                if ($trialsStarted -or -not $allowLegacyFallback) {
+                    throw
+                }
+
+                Write-Warning "BenchPilot findbest failed before trials started: $($_.Exception.Message)"
+                Write-Warning "Falling back to the legacy launcher tuner."
+            }
+        }
+        elseif (-not $allowLegacyFallback) {
+            throw "BenchPilot is not available and BenchPilotAllowLegacyFallback is false. Reason: $($bpStatus.Reason)"
+        }
+    }
+    elseif (-not $allowLegacyFallback) {
+        throw "BenchPilot integration is disabled or unavailable and BenchPilotAllowLegacyFallback is false."
+    }
+
+    return Find-BestLlamaCppConfigLegacy @PSBoundParameters
 }
 
 function Read-LlamaCppTunerHistoryEntries {

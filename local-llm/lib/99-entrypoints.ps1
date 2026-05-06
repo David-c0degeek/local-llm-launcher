@@ -11,6 +11,7 @@ function reloadllm { Reload-LocalLLMConfig }
 #   lstop = ostop parallel  (stop every llama-server.exe; no restart)
 function lps    { Get-LlamaServerStatus }
 function lstop  { Stop-AllLlamaServers }
+function bp     { bpstatus }
 
 # Cross-backend nuclear option: free all VRAM by stopping Ollama and every
 # llama-server.exe. Neither backend is restarted afterwards.

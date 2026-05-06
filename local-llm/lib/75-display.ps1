@@ -563,6 +563,7 @@ function Show-LLMProfileInfo {
 
     Show-ClaudeTarget
     Show-OllamaStatus -All:$All
+    Show-BenchPilotLauncherStatus -Quiet | Out-Null
     Show-ModelCatalog -All:$All
 
     if (-not (Test-LocalLLMSpectreAvailable)) {
@@ -724,12 +725,14 @@ Manage
   init -Force           Rebuild all aliases
   init -Stale           Rebuild only aliases whose parser stamp is missing/stale
   initmodel <key> [-Force]
+  bpstatus              Show BenchPilot discovery/version status
   listorphans           Show Ollama models not present in llm-models.json
   cleanorphans          Remove orphan Ollama models (confirms first)
   purge                 Remove every configured alias and every GGUF file
   obench [-Model name]  Show benchmark history (~/.local-llm/bench-history.jsonl)
   findbest <key> -ContextKey <ctx> [-Mode native|turboquant] [-Quick|-Deep] [-Budget 30]
-                        Auto-tune llama.cpp launch flags for this box (writes
+                        Auto-tune llama.cpp launch flags for this box. Uses
+                        BenchPilot when available, with legacy fallback (writes
                         ~/.local-llm/tuner/best-<key>.json). Use with
                         Start-ClaudeWithLlamaCppModel -AutoBest later.
                         The wizard also exposes Find best settings and

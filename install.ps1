@@ -4,6 +4,9 @@
 #   .\install.ps1                  copy files (default)
 #   .\install.ps1 -Symlink         symlink files (requires admin / developer mode)
 #   .\install.ps1 -SetupProfile    only ensure $PROFILE dot-sources the deployed entry point
+#   .\install.ps1 -InstallBenchPilot   clone BenchPilot into ~/.local-llm/tools/benchpilot if missing
+#   .\install.ps1 -InstallUnshackled   clone Unshackled into ~/.local-llm/tools/unshackled if missing
+#   .\install.ps1 -SkipToolPrompts     do not prompt for optional companion checkouts
 #   .\install.ps1 -DryRun          preview the actions without changing anything
 #
 # Multiple flags compose: -Symlink -SetupProfile installs symlinks AND wires up $PROFILE.
@@ -11,6 +14,9 @@
 param(
     [switch]$Symlink,
     [Alias("Profile")][switch]$SetupProfile,
+    [switch]$InstallBenchPilot,
+    [switch]$InstallUnshackled,
+    [switch]$SkipToolPrompts,
     [switch]$DryRun
 )
 
@@ -24,6 +30,9 @@ if (-not $RepoRoot) {
 
 $DeployedLocalLLM = Join-Path $HOME ".local-llm"
 $DeployedProxy = Join-Path $HOME ".ollama-proxy"
+$ManagedToolsRoot = Join-Path $DeployedLocalLLM "tools"
+$ManagedBenchPilotRoot = Join-Path $ManagedToolsRoot "benchpilot"
+$ManagedUnshackledRoot = Join-Path $ManagedToolsRoot "unshackled"
 $ProfileDotSourceLine = ". `"$DeployedLocalLLM\LocalLLMProfile.ps1`""
 
 # -SetupProfile alone (no -Symlink, no -DryRun) means "just wire up $PROFILE, don't touch files".
@@ -165,6 +174,175 @@ function Ensure-ProfileDotSource {
     }
 }
 
+function Read-JsonHashtable {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) { return [ordered]@{} }
+    try { return (Get-Content -Raw -Path $Path | ConvertFrom-Json -AsHashtable) }
+    catch { return [ordered]@{} }
+}
+
+function Write-LocalLLMSettings {
+    param([System.Collections.IDictionary]$Settings)
+
+    $path = Join-Path $DeployedLocalLLM "settings.json"
+    Ensure-Dir $DeployedLocalLLM
+
+    if ($DryRun) {
+        Write-Action "write" $path
+        return
+    }
+
+    $json = $Settings | ConvertTo-Json -Depth 8
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
+}
+
+function Set-InstallSetting {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][object]$Value
+    )
+
+    $settingsPath = Join-Path $DeployedLocalLLM "settings.json"
+    $settings = Read-JsonHashtable -Path $settingsPath
+    $settings[$Key] = $Value
+    Write-LocalLLMSettings -Settings $settings
+}
+
+function Get-InstallCatalog {
+    $deployedCatalog = Join-Path $DeployedLocalLLM "llm-models.json"
+    $sourceCatalog = Join-Path $RepoRoot "local-llm\llm-models.json"
+    $path = if (Test-Path $deployedCatalog) { $deployedCatalog } else { $sourceCatalog }
+    return Read-JsonHashtable -Path $path
+}
+
+function Test-BenchPilotCheckout {
+    param([string]$Root)
+
+    if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
+    return (Test-Path (Join-Path $Root "src\BenchPilot.psm1"))
+}
+
+function Test-UnshackledCheckout {
+    param([string]$Root)
+
+    if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
+    return (Test-Path (Join-Path $Root "src\entrypoints\cli.tsx"))
+}
+
+function Find-BenchPilotInstall {
+    $candidates = @()
+    if ($env:BENCHPILOT_ROOT) { $candidates += $env:BENCHPILOT_ROOT }
+
+    $settings = Read-JsonHashtable -Path (Join-Path $DeployedLocalLLM "settings.json")
+    if ($settings.Contains("BenchPilotRoot")) { $candidates += [string]$settings.BenchPilotRoot }
+
+    $module = Get-Module -ListAvailable -Name BenchPilot -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($module) { return [pscustomobject]@{ Source = "module"; Root = $module.ModuleBase } }
+
+    $candidates += $ManagedBenchPilotRoot
+    $candidates += "D:\repos\benchpilot"
+
+    foreach ($candidate in $candidates) {
+        if (Test-BenchPilotCheckout -Root $candidate) {
+            return [pscustomobject]@{ Source = "checkout"; Root = $candidate }
+        }
+    }
+
+    return $null
+}
+
+function Find-UnshackledInstall {
+    $settings = Read-JsonHashtable -Path (Join-Path $DeployedLocalLLM "settings.json")
+    $catalog = Get-InstallCatalog
+    $candidates = @()
+
+    if ($settings.Contains("UnshackledRoot")) { $candidates += [string]$settings.UnshackledRoot }
+    if ($catalog.Contains("UnshackledRoot")) { $candidates += [string]$catalog.UnshackledRoot }
+    $candidates += $ManagedUnshackledRoot
+    $candidates += "D:\repos\unshackled"
+
+    foreach ($candidate in $candidates) {
+        if (Test-UnshackledCheckout -Root $candidate) {
+            return [pscustomobject]@{ Source = "checkout"; Root = $candidate }
+        }
+    }
+
+    return $null
+}
+
+function Clone-Repo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$RepoUrl,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH; cannot clone $Name."
+    }
+
+    if (Test-Path $Destination) {
+        Write-Host "  ok       $Name path already exists: $Destination" -ForegroundColor DarkGreen
+        return
+    }
+
+    Ensure-Dir (Split-Path -Parent $Destination)
+    Write-Action "clone" "$RepoUrl -> $Destination"
+
+    if (-not $DryRun) {
+        & git clone $RepoUrl $Destination
+        if ($LASTEXITCODE -ne 0) {
+            throw "git clone failed for $RepoUrl"
+        }
+    }
+}
+
+function Confirm-InstallTool {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$RepoUrl,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [switch]$Force
+    )
+
+    if ($Force) { return $true }
+    if ($DryRun) { return $false }
+    if ($SkipToolPrompts) { return $false }
+
+    Write-Host ""
+    Write-Host "$Name was not found." -ForegroundColor Yellow
+    Write-Host "  Source : $RepoUrl" -ForegroundColor DarkGray
+    Write-Host "  Target : $Destination" -ForegroundColor DarkGray
+    $answer = (Read-Host "Clone $Name now? [y/N]").Trim().ToLowerInvariant()
+    return ($answer -in @("y", "yes"))
+}
+
+function Ensure-CompanionTools {
+    $catalog = Get-InstallCatalog
+    $benchPilotRepo = if ($catalog.Contains("BenchPilotRepoUrl")) { [string]$catalog.BenchPilotRepoUrl } else { "https://github.com/David-c0degeek/benchpilot" }
+    $unshackledRepo = if ($catalog.Contains("UnshackledRepoUrl")) { [string]$catalog.UnshackledRepoUrl } else { "https://github.com/David-c0degeek/unshackled" }
+
+    $bp = Find-BenchPilotInstall
+    if ($bp) {
+        Write-Host "  ok       BenchPilot found ($($bp.Source)): $($bp.Root)" -ForegroundColor DarkGreen
+    }
+    elseif (Confirm-InstallTool -Name "BenchPilot" -RepoUrl $benchPilotRepo -Destination $ManagedBenchPilotRoot -Force:$InstallBenchPilot) {
+        Clone-Repo -Name "BenchPilot" -RepoUrl $benchPilotRepo -Destination $ManagedBenchPilotRoot
+        Set-InstallSetting -Key "BenchPilotRoot" -Value $ManagedBenchPilotRoot
+    }
+
+    $unshackled = Find-UnshackledInstall
+    if ($unshackled) {
+        Write-Host "  ok       Unshackled found ($($unshackled.Source)): $($unshackled.Root)" -ForegroundColor DarkGreen
+    }
+    elseif (Confirm-InstallTool -Name "Unshackled" -RepoUrl $unshackledRepo -Destination $ManagedUnshackledRoot -Force:$InstallUnshackled) {
+        Clone-Repo -Name "Unshackled" -RepoUrl $unshackledRepo -Destination $ManagedUnshackledRoot
+        Set-InstallSetting -Key "UnshackledRoot" -Value $ManagedUnshackledRoot
+    }
+}
+
 function Show-Diagnostics {
     Write-Host ""
     Write-Host "=== Diagnostics ===" -ForegroundColor Cyan
@@ -204,6 +382,22 @@ function Show-Diagnostics {
     else {
         Write-Host "spectre  : missing — 'info' falls back to plain text. Install with:" -ForegroundColor DarkGray
         Write-Host "             Install-Module PwshSpectreConsole -Scope CurrentUser" -ForegroundColor DarkGray
+    }
+
+    $benchPilot = Find-BenchPilotInstall
+    if ($benchPilot) {
+        Write-Host "benchpilot: ok  ($($benchPilot.Root))" -ForegroundColor Green
+    }
+    else {
+        Write-Host "benchpilot: missing — installer can clone https://github.com/David-c0degeek/benchpilot into ~/.local-llm/tools/benchpilot" -ForegroundColor Yellow
+    }
+
+    $unshackled = Find-UnshackledInstall
+    if ($unshackled) {
+        Write-Host "unshackled: ok  ($($unshackled.Root))" -ForegroundColor Green
+    }
+    else {
+        Write-Host "unshackled: missing — installer can clone https://github.com/David-c0degeek/unshackled into ~/.local-llm/tools/unshackled" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -247,6 +441,7 @@ if ($SetupProfile -or -not $installFiles) {
     Ensure-ProfileDotSource
 }
 
+Ensure-CompanionTools
 Show-Diagnostics
 
 if (-not $DryRun) {
@@ -256,5 +451,6 @@ if (-not $DryRun) {
     Write-Host "Per-machine settings (paths, defaults) belong in ~/.local-llm/settings.json." -ForegroundColor DarkGray
     Write-Host "Use the helper instead of editing JSON:" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting UnshackledRoot 'C:\path\to\unshackled'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting BenchPilotRoot 'C:\path\to\benchpilot'" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting Default q36plus" -ForegroundColor DarkGray
 }

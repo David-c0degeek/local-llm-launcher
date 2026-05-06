@@ -67,6 +67,11 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppNCpuMoe"))               { $cfg.LlamaCppNCpuMoe = 35 }
     if (-not $cfg.ContainsKey("LlamaCppMlock"))                 { $cfg.LlamaCppMlock = $true }
     if (-not $cfg.ContainsKey("LlamaCppNoMmap"))                { $cfg.LlamaCppNoMmap = $true }
+    if (-not $cfg.ContainsKey("BenchPilotRoot"))                { $cfg.BenchPilotRoot = "" }
+    if (-not $cfg.ContainsKey("BenchPilotRepoUrl"))             { $cfg.BenchPilotRepoUrl = "https://github.com/David-c0degeek/benchpilot" }
+    if (-not $cfg.ContainsKey("BenchPilotPreferExternal"))      { $cfg.BenchPilotPreferExternal = $true }
+    if (-not $cfg.ContainsKey("BenchPilotAllowLegacyFallback")) { $cfg.BenchPilotAllowLegacyFallback = $true }
+    if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
 
     # Drop the obsolete docker-image setting if a stale settings.json or
     # catalog still carries it.
@@ -75,6 +80,7 @@ function Import-LocalLLMConfig {
     $cfg.LlamaCppServerPath     = Expand-LocalLLMPath $cfg.LlamaCppServerPath
     $cfg.LlamaCppTurboquantRoot = Expand-LocalLLMPath $cfg.LlamaCppTurboquantRoot
     $cfg.LlamaCppGgufRoot       = Expand-LocalLLMPath $cfg.LlamaCppGgufRoot
+    $cfg.BenchPilotRoot         = Expand-LocalLLMPath $cfg.BenchPilotRoot
 
     # Migrate the pre-rename field name (FreeCodeRoot → UnshackledRoot) on read.
     if ($cfg.Contains("FreeCodeRoot") -and -not $cfg.Contains("UnshackledRoot")) {

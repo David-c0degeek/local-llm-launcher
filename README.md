@@ -290,6 +290,8 @@ From the repo root:
 . .\install.ps1                  # copy files to deployed locations + add to $PROFILE
 . .\install.ps1 -Symlink         # symlink instead of copy (admin / dev mode)
 . .\install.ps1 -SetupProfile    # only ensure $PROFILE dot-sources the deployed file
+. .\install.ps1 -InstallBenchPilot   # also clone BenchPilot if missing
+. .\install.ps1 -InstallUnshackled   # also clone Unshackled if missing
 . .\install.ps1 -DryRun          # preview without changing anything
 ```
 
@@ -300,10 +302,10 @@ init                             # build aliases for the recommended-tier models
 info                             # verify: VRAM, default model, parser freshness
 ```
 
-The `Show-Diagnostics` step at the end of install reports on `ollama`,
-`python`, `bun` (only needed for Unshackled), and `PwshSpectreConsole` (only
-needed for the rich dashboard / wizard). Anything missing is flagged with
-install hints.
+The install step offers to clone missing BenchPilot and Unshackled checkouts
+into `~/.local-llm/tools/`. Use `-SkipToolPrompts` for unattended installs.
+`Show-Diagnostics` also reports on `ollama`, `python`, `bun` (only needed for
+Unshackled), `PwshSpectreConsole`, BenchPilot, and Unshackled.
 
 ---
 
@@ -434,6 +436,7 @@ Use the helper instead of editing JSON:
 
 ```powershell
 Set-LocalLLMSetting UnshackledRoot 'C:\repos\unshackled'
+Set-LocalLLMSetting BenchPilotRoot 'C:\repos\benchpilot'
 Set-LocalLLMSetting Default q36plus
 Set-LocalLLMSetting KeepAlive '5m'
 Set-LocalLLMSetting VRAMGB 32                        # override auto-detect
