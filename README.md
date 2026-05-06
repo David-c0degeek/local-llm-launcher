@@ -486,6 +486,57 @@ Trim-LLMBenchHistory -OlderThanDays 90           # apply pruning
 
 ---
 
+## llama.cpp auto-tuner (`findbest`)
+
+`findbest` searches the perf-only flag space for the highest-throughput launch
+config on this machine — without touching anything that could affect generation
+quality (quant, context, KV cache types stay locked unless you explicitly
+widen). Result lands in `~/.local-llm/tuner/best-<key>.json` and is replayed by
+`Start-ClaudeWithLlamaCppModel -AutoBest`.
+
+```powershell
+# Tune q36plus at the 256k context preset, native llama.cpp, default budget
+findbest q36plus -ContextKey 256k
+
+# Quick mode — only baseline + n-cpu-moe + batching (~10 trials)
+findbest q36plus -ContextKey 256k -Quick
+
+# Optimize for prompt-eval (prefill) instead of generation
+findbest q36plus -ContextKey 256k -Optimize prompt
+
+# Allow KV cache variation (default = the model's current single type)
+findbest q36plus -ContextKey 256k -AllowedKvTypes q8_0,f16
+
+# Inspect every trial run for a model
+Show-LlamaCppTunerHistory -Key q36plus -Last 50
+```
+
+**What gets searched (T1 phases):**
+
+1. **baseline** — catalog defaults, one probe.
+2. **moe_or_ngl** — for MoE models, sweep `--n-cpu-moe` to find the smallest
+   value that still fits VRAM (more layers on GPU = faster). For dense models
+   with `-ngl` already at 999, this phase is a no-op unless baseline OOMed.
+3. **batching** — joint sweep of `(--ubatch-size, --batch-size)` over a small
+   2-D grid.
+
+OOM is detected from llama-server stderr; OOM-monotonicity prunes branches
+that are guaranteed to fail. Phases 4–7 (flash-attn / mlock / threads / KV)
+land in T2.
+
+**Replaying the saved best:**
+
+```powershell
+Start-ClaudeWithLlamaCppModel -Key q36plus -ContextKey 256k -Mode native -AutoBest
+```
+
+The launcher matches the saved entry on `(key, contextKey, mode, vramGB ± 1)`
+and a tuner-version stamp; on a miss it warns and falls through to defaults.
+Caller-supplied `-KvCacheK` / `-KvCacheV` / `-ExtraArgs` always win over the
+saved values.
+
+---
+
 ## Wizard
 
 `llm` launches an interactive picker (Spectre-rendered when

@@ -380,6 +380,7 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$LimitTools,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$Strict,
+        [switch]$AutoBest,
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs
     )
@@ -420,17 +421,48 @@ function Start-ClaudeWithLlamaCppModel {
 
     $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
 
-    $serverArgs = Build-LlamaServerArgs `
-        -Def $def `
-        -ContextKey $ContextKey `
-        -Mode $Mode `
-        -ModelArgPath $modelArgPath `
-        -Port $port `
-        -KvK $KvCacheK `
-        -KvV $KvCacheV `
-        -ThinkingPolicy $thinkingPolicy `
-        -Strict:$Strict `
-        -ExtraArgs $ExtraArgs
+    $buildParams = @{
+        Def            = $def
+        ContextKey     = $ContextKey
+        Mode           = $Mode
+        ModelArgPath   = $modelArgPath
+        Port           = $port
+        ThinkingPolicy = $thinkingPolicy
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
+    if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
+    if ($Strict)    { $buildParams.Strict = $true }
+    if ($ExtraArgs) { $buildParams.ExtraArgs = $ExtraArgs }
+
+    # -AutoBest splats saved tuner overrides into Build-LlamaServerArgs.
+    # Caller-supplied args (KvCacheK/KvCacheV/ExtraArgs above) take precedence
+    # because they were set before this block — we only fill in keys that
+    # haven't already been bound.
+    if ($AutoBest) {
+        $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode
+        if ($bestEntry -and $bestEntry.overrides) {
+            Write-Host "AutoBest: loaded saved tuner config (score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
+            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode')
+            foreach ($k in $tunable) {
+                if ($buildParams.ContainsKey($k)) { continue }
+                $val = $null
+                if ($bestEntry.overrides -is [System.Collections.IDictionary]) {
+                    if ($bestEntry.overrides.Contains($k)) { $val = $bestEntry.overrides[$k] }
+                } else {
+                    $prop = $bestEntry.overrides.PSObject.Properties[$k]
+                    if ($prop) { $val = $prop.Value }
+                }
+                if ($null -ne $val) { $buildParams[$k] = $val }
+            }
+        } elseif ($bestEntry) {
+            Write-Warning "AutoBest: matched saved entry has no 'overrides' field (older tuner version?). Skipping."
+        } else {
+            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode vram=$(Get-LocalLLMVRAMGB)GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode"
+        }
+    }
+
+    $serverArgs = Build-LlamaServerArgs @buildParams
 
     # Resolve the server binary based on mode (upstream vs turboquant fork).
     $serverPath = if ($Mode -eq 'turboquant') {

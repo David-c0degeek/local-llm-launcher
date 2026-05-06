@@ -62,6 +62,12 @@ function Build-LlamaServerArgs {
         [int]$NCpuMoe,
         [Nullable[bool]]$Mlock,
         [Nullable[bool]]$NoMmap,
+        [int]$UbatchSize,
+        [int]$BatchSize,
+        [int]$Threads,
+        [int]$ThreadsBatch,
+        [Nullable[bool]]$FlashAttn,
+        [ValidateSet('none', 'layer', 'row')][string]$SplitMode,
         [string]$ChatTemplate,
         [string]$ThinkingPolicy,
         [switch]$Strict,
@@ -124,6 +130,41 @@ function Build-LlamaServerArgs {
         $NoMmap = if ($Def.Contains('NoMmap')) { [bool]$Def.NoMmap } else { [bool]$script:Cfg.LlamaCppNoMmap }
     }
     if ($NoMmap) { $argList.Add('--no-mmap') | Out-Null }
+
+    # Batching. Emitted only when explicitly set. ub <= b is a hard llama-server
+    # invariant; we don't enforce it here (tuner's responsibility).
+    if ($PSBoundParameters.ContainsKey('UbatchSize') -and $UbatchSize -gt 0) {
+        $argList.Add('--ubatch-size')      | Out-Null
+        $argList.Add([string]$UbatchSize)  | Out-Null
+    }
+    if ($PSBoundParameters.ContainsKey('BatchSize') -and $BatchSize -gt 0) {
+        $argList.Add('--batch-size')       | Out-Null
+        $argList.Add([string]$BatchSize)   | Out-Null
+    }
+
+    # Thread pools. Only meaningful when CPU is doing work (MoE offload, dense
+    # CPU-only). The tuner gates emission on $NCpuMoe > 0.
+    if ($PSBoundParameters.ContainsKey('Threads') -and $Threads -gt 0) {
+        $argList.Add('--threads')          | Out-Null
+        $argList.Add([string]$Threads)     | Out-Null
+    }
+    if ($PSBoundParameters.ContainsKey('ThreadsBatch') -and $ThreadsBatch -gt 0) {
+        $argList.Add('--threads-batch')    | Out-Null
+        $argList.Add([string]$ThreadsBatch) | Out-Null
+    }
+
+    # Flash attention. Emitted only when caller passes a value — leaving the
+    # llama-server default ("auto" since b6020) intact otherwise.
+    if ($PSBoundParameters.ContainsKey('FlashAttn') -and $null -ne $FlashAttn) {
+        $argList.Add('--flash-attn')                       | Out-Null
+        $argList.Add($(if ($FlashAttn) { 'on' } else { 'off' })) | Out-Null
+    }
+
+    # Multi-GPU split mode. Emitted only when caller passes a value.
+    if ($PSBoundParameters.ContainsKey('SplitMode') -and -not [string]::IsNullOrWhiteSpace($SplitMode)) {
+        $argList.Add('--split-mode')   | Out-Null
+        $argList.Add($SplitMode)       | Out-Null
+    }
 
     # KV cache types (validated against mode).
     $kv = Get-LlamaCppKvTypes -Def $Def -KvK $KvK -KvV $KvV

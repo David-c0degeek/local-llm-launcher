@@ -728,6 +728,10 @@ Manage
   cleanorphans          Remove orphan Ollama models (confirms first)
   purge                 Remove every configured alias and every GGUF file
   obench [-Model name]  Show benchmark history (~/.local-llm/bench-history.jsonl)
+  findbest <key> -ContextKey <ctx> [-Mode native|turboquant] [-Quick] [-Budget 30]
+                        Auto-tune llama.cpp launch flags for this box (writes
+                        ~/.local-llm/tuner/best-<key>.json). Use with
+                        Start-ClaudeWithLlamaCppModel -AutoBest later.
 
 Add or remove a model
   addllm <hf-url-or-repo> -Key <key>
