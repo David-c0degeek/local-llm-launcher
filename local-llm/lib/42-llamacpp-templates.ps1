@@ -96,8 +96,9 @@ function ConvertFrom-OllamaParameter {
 }
 
 function Get-LlamaCppStrictSystemPromptPath {
-    # Renders Get-StrictModelfileLines into a Jinja-free plain text file llama-server
-    # can pass via --system-prompt-file. Cached so repeated launches don't churn.
+    # Legacy helper retained for callers that want a rendered strict prompt
+    # file. Build-LlamaServerArgs does not pass this to llama-server because
+    # some supported builds reject --system-prompt-file.
     $dir = Get-LlamaCppTemplatesDir
     Ensure-Directory $dir
 

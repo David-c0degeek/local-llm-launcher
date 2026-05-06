@@ -204,9 +204,6 @@ function Build-LlamaServerArgs {
         foreach ($a in (Get-LlamaCppStrictSamplerArgs)) {
             $argList.Add($a) | Out-Null
         }
-        $strictPath = Get-LlamaCppStrictSystemPromptPath
-        $argList.Add('--system-prompt-file') | Out-Null
-        $argList.Add($strictPath)            | Out-Null
     }
 
     # Per-model ExtraArgs first, then per-call ExtraArgs (call wins because it

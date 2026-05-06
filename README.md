@@ -144,9 +144,9 @@ RENDERER/PARSER/template forward, and the overlay only overrides
 SYSTEM + sampling. Any model family works without per-parser branching.
 
 The same overlay is wired into the llama.cpp path: pass `-Strict` and
-`Build-LlamaServerArgs` injects the strict sampler flags plus a
-`--system-prompt-file` pointing at the rendered overlay (cached under
-`~/.local-llm/llamacpp-templates/strict-system.txt`).
+`Build-LlamaServerArgs` injects the strict sampler flags. The strict system
+prompt still comes from the Claude/Unshackled launch harness, not from a
+`llama-server`-specific system-prompt flag.
 
 > **When to use it.** Strict overlay is for actual engineering work where the
 > model's lazy paths (mock, stub, "// TODO", placeholder JSON) cost real time.
@@ -214,8 +214,8 @@ llama.cpp is the path you want when:
 - You need a KV cache type Ollama doesn't expose (`turbo4`, `iq4_nl`).
 - You want explicit control over `--n-cpu-moe`, `--mlock`, `--no-mmap`.
 - You're running a quant Ollama refuses to load.
-- You want the strict overlay applied as a `--system-prompt-file` rather than
-  baked into a Modelfile.
+- You want the strict overlay applied at launch time rather than baked into a
+  Modelfile.
 
 Otherwise Ollama is the simpler default — alias namespace, `ollama ps`,
 `ollama show`, the bench history all assume Ollama.
