@@ -726,6 +726,10 @@ Manage
   init -Stale           Rebuild only aliases whose parser stamp is missing/stale
   initmodel <key> [-Force]
   bpstatus              Show BenchPilot discovery/version status
+  Install-BenchPilot    Clone/configure the managed BenchPilot checkout
+  Update-BenchPilot     Pull the configured BenchPilot checkout
+  Install-Unshackled    Clone/configure the managed Unshackled checkout
+  Update-Unshackled     Pull the configured Unshackled checkout
   listorphans           Show Ollama models not present in llm-models.json
   cleanorphans          Remove orphan Ollama models (confirms first)
   purge                 Remove every configured alias and every GGUF file

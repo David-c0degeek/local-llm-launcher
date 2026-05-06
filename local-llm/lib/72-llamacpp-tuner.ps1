@@ -1059,7 +1059,7 @@ function Remove-LlamaCppBestConfig {
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
     if (-not (Test-Path $path)) {
-        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false }
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false; RemovedBenchPilotProfiles = @() }
     }
 
     $data = $null
@@ -1069,11 +1069,12 @@ function Remove-LlamaCppBestConfig {
     }
 
     if (-not $data -or -not $data.Contains('entries')) {
-        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false }
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = 0; DeletedFile = $false; RemovedBenchPilotProfiles = @() }
     }
 
     $kept = @()
     $removed = 0
+    $removedBenchPilotProfiles = @()
     foreach ($entry in @($data.entries)) {
         $entryPromptLength = if ($entry.prompt_length) { [string]$entry.prompt_length } else { 'short' }
         $vramMatches = $entry.vramGB -and ([Math]::Abs([int]$entry.vramGB - [int]$VramGB) -le 1)
@@ -1093,18 +1094,27 @@ function Remove-LlamaCppBestConfig {
 
         if ($matches) {
             $removed++
+            if ($entry.benchpilot_profile_path) {
+                $removedBenchPilotProfiles += [string]$entry.benchpilot_profile_path
+            }
         } else {
             $kept += $entry
         }
     }
 
     if ($removed -le 0) {
-        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = @($data.entries).Count; DeletedFile = $false }
+        return [pscustomobject]@{ Path = $path; Removed = 0; Remaining = @($data.entries).Count; DeletedFile = $false; RemovedBenchPilotProfiles = @() }
     }
 
     if ($kept.Count -eq 0) {
         Remove-Item -LiteralPath $path -Force
-        return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = 0; DeletedFile = $true }
+        foreach ($profilePath in @($removedBenchPilotProfiles | Where-Object { $_ } | Select-Object -Unique)) {
+            $expanded = Expand-LocalLLMPath $profilePath
+            if (Test-Path -LiteralPath $expanded) {
+                Remove-Item -LiteralPath $expanded -Force -ErrorAction SilentlyContinue
+            }
+        }
+        return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = 0; DeletedFile = $true; RemovedBenchPilotProfiles = @($removedBenchPilotProfiles) }
     }
 
     $data.entries = $kept
@@ -1112,7 +1122,14 @@ function Remove-LlamaCppBestConfig {
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($path, $json, $utf8NoBom)
 
-    return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = $kept.Count; DeletedFile = $false }
+    foreach ($profilePath in @($removedBenchPilotProfiles | Where-Object { $_ } | Select-Object -Unique)) {
+        $expanded = Expand-LocalLLMPath $profilePath
+        if (Test-Path -LiteralPath $expanded) {
+            Remove-Item -LiteralPath $expanded -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    return [pscustomobject]@{ Path = $path; Removed = $removed; Remaining = $kept.Count; DeletedFile = $false; RemovedBenchPilotProfiles = @($removedBenchPilotProfiles) }
 }
 
 function Test-LlamaCppBestConfigStale {

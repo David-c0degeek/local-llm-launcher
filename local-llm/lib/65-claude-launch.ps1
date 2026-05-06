@@ -175,6 +175,57 @@ function Ensure-UnshackledInstalled {
     }
 }
 
+function Install-Unshackled {
+    [CmdletBinding()]
+    param(
+        [string]$Destination = (Join-Path $HOME '.local-llm\tools\unshackled'),
+        [switch]$Force
+    )
+
+    if ((Test-Path -LiteralPath (Join-Path $Destination 'src\entrypoints\cli.tsx')) -and -not $Force) {
+        Write-Host "Unshackled already exists: $Destination" -ForegroundColor Green
+        Set-LocalLLMSetting UnshackledRoot $Destination
+        return $Destination
+    }
+
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH; cannot clone Unshackled."
+    }
+
+    $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.UnshackledRepoUrl)) {
+        [string]$script:Cfg.UnshackledRepoUrl
+    } else {
+        'https://github.com/David-c0degeek/unshackled'
+    }
+
+    Ensure-Directory (Split-Path -Parent $Destination)
+    if (Test-Path -LiteralPath $Destination) {
+        throw "Destination already exists: $Destination. Use Update-Unshackled, or remove it and retry."
+    }
+
+    & git clone $repoUrl $Destination
+    if ($LASTEXITCODE -ne 0) { throw "git clone failed for $repoUrl" }
+
+    Set-LocalLLMSetting UnshackledRoot $Destination
+    return $Destination
+}
+
+function Update-Unshackled {
+    [CmdletBinding()]
+    param()
+
+    $root = $script:Cfg.UnshackledRoot
+    if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
+        throw "Unshackled is not installed. Run Install-Unshackled first."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $root '.git'))) {
+        throw "Unshackled root is not a git checkout: $root"
+    }
+
+    & git -C $root pull --ff-only
+    if ($LASTEXITCODE -ne 0) { throw "git pull failed for $root" }
+}
+
 function Get-UnshackledExtraArgs {
     # Merges the -ExtraUnshackledArgs param with $env:UNSHACKLED_EXTRA_ARGS.
     # Env-var splitting is whitespace-only — sufficient for flags like `-D` or

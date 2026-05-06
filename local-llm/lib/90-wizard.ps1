@@ -432,18 +432,46 @@ function Invoke-LlamaCppTunerWizardFlow {
     Write-Host ("  overrides : {0}" -f (Format-LlamaCppOverrides -Overrides $result.Overrides)) -ForegroundColor DarkGray
     Write-Host ""
 
+    if ($result.report_path) {
+        $openReport = if ($UseSpectrePrompts) {
+            Read-LLMYesNoSpectre -Message "Open BenchPilot report?" -DefaultYes
+        } else {
+            Read-LLMYesNo -Prompt "Open BenchPilot report?" -DefaultYes:$true
+        }
+        if ($openReport -and (Test-Path -LiteralPath $result.report_path)) {
+            Invoke-Item -LiteralPath $result.report_path
+        }
+    }
+
     $saveAnswer = if ($UseSpectrePrompts) {
         Read-LLMYesNoSpectre -Message "Save as the default for this machine?" -DefaultYes
     } else {
         Read-LLMYesNo -Prompt "Save as the default for this machine?" -DefaultYes:$true
     }
     if ($saveAnswer) {
-        $saved = Save-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode `
-            -Quant $result.Quant -VramGB $result.VramGB `
-            -PromptLength $result.PromptLength `
-            -BestArgs $result.Args -BestOverrides $result.Overrides `
-            -Score $result.Score -ScoreUnit $result.ScoreUnit `
-            -TrialCount $result.TrialCount
+        if ($result.source -eq 'benchpilot' -and (Get-Command Export-BenchPilotLauncherProfile -ErrorAction SilentlyContinue)) {
+            $saved = Export-BenchPilotLauncherProfile `
+                -Key $ModelKey `
+                -ContextKey $ContextKey `
+                -Mode $Mode `
+                -Quant $result.Quant `
+                -VramGB $result.VramGB `
+                -PromptLength $result.PromptLength `
+                -Overrides $result.Overrides `
+                -Args @($result.Args) `
+                -Score $result.Score `
+                -ScoreUnit $result.ScoreUnit `
+                -TrialCount $result.TrialCount `
+                -NativeProfilePath $result.native_profile_path `
+                -ReportPath $result.report_path
+        } else {
+            $saved = Save-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode `
+                -Quant $result.Quant -VramGB $result.VramGB `
+                -PromptLength $result.PromptLength `
+                -BestArgs $result.Args -BestOverrides $result.Overrides `
+                -Score $result.Score -ScoreUnit $result.ScoreUnit `
+                -TrialCount $result.TrialCount
+        }
         Write-Host "Saved best -> $saved" -ForegroundColor DarkGray
     }
 
@@ -490,6 +518,9 @@ function Invoke-LlamaCppBestResetWizardFlow {
             Write-Host "Removed $($result.Path)" -ForegroundColor DarkGray
         } else {
             Write-Host "$($result.Remaining) saved setting(s) remain in $($result.Path)" -ForegroundColor DarkGray
+        }
+        if ($result.PSObject.Properties['RemovedBenchPilotProfiles'] -and @($result.RemovedBenchPilotProfiles).Count -gt 0) {
+            Write-Host "Removed $(@($result.RemovedBenchPilotProfiles).Count) BenchPilot native profile reference(s)." -ForegroundColor DarkGray
         }
     } else {
         Write-Host "No matching saved best settings found." -ForegroundColor DarkGray

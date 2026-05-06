@@ -294,3 +294,56 @@ function bpstatus {
 
     Show-BenchPilotLauncherStatus | Out-Null
 }
+
+function Install-BenchPilot {
+    [CmdletBinding()]
+    param(
+        [string]$Destination = (Join-Path $HOME '.local-llm\tools\benchpilot'),
+        [switch]$Force
+    )
+
+    if ((Resolve-BenchPilotModulePath -Root $Destination) -and -not $Force) {
+        Write-Host "BenchPilot already exists: $Destination" -ForegroundColor Green
+        Set-LocalLLMSetting BenchPilotRoot $Destination
+        return $Destination
+    }
+
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH; cannot clone BenchPilot."
+    }
+
+    $repoUrl = if ($script:Cfg.ContainsKey('BenchPilotRepoUrl') -and -not [string]::IsNullOrWhiteSpace($script:Cfg.BenchPilotRepoUrl)) {
+        [string]$script:Cfg.BenchPilotRepoUrl
+    } else {
+        'https://github.com/David-c0degeek/benchpilot'
+    }
+
+    Ensure-Directory (Split-Path -Parent $Destination)
+    if (Test-Path -LiteralPath $Destination) {
+        throw "Destination already exists: $Destination. Use Update-BenchPilot, or remove it and retry."
+    }
+
+    & git clone $repoUrl $Destination
+    if ($LASTEXITCODE -ne 0) { throw "git clone failed for $repoUrl" }
+
+    Set-LocalLLMSetting BenchPilotRoot $Destination
+    return $Destination
+}
+
+function Update-BenchPilot {
+    [CmdletBinding()]
+    param()
+
+    $resolved = Resolve-BenchPilotRoot
+    if (-not $resolved) {
+        throw "BenchPilot is not installed. Run Install-BenchPilot first."
+    }
+
+    $root = $resolved.Root
+    if (-not (Test-Path -LiteralPath (Join-Path $root '.git'))) {
+        throw "BenchPilot root is not a git checkout: $root"
+    }
+
+    & git -C $root pull --ff-only
+    if ($LASTEXITCODE -ne 0) { throw "git pull failed for $root" }
+}
