@@ -17,6 +17,45 @@ function Clear-CurrentBackendSession {
     $script:CurrentBackendSession = $null
 }
 
+function New-LlamaServerLogPaths {
+    $dir = Join-Path $HOME ".local-llm\logs"
+    Ensure-Directory $dir
+
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+    return @{
+        Out = Join-Path $dir "llama-server-$stamp.out.log"
+        Err = Join-Path $dir "llama-server-$stamp.err.log"
+    }
+}
+
+function Get-LlamaServerLogTail {
+    param(
+        [string]$OutLogPath,
+        [string]$ErrLogPath,
+        [int]$Lines = 40
+    )
+
+    $chunks = @()
+
+    foreach ($entry in @(
+            @{ Label = "stderr"; Path = $ErrLogPath },
+            @{ Label = "stdout"; Path = $OutLogPath }
+        )) {
+        $path = $entry.Path
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+            continue
+        }
+
+        $tail = @(Get-Content -LiteralPath $path -Tail $Lines -ErrorAction SilentlyContinue)
+        if ($tail.Count -gt 0) {
+            $chunks += "---- $($entry.Label): $path ----"
+            $chunks += $tail
+        }
+    }
+
+    return ($chunks -join "`n")
+}
+
 function Test-LlamaCppPortFree {
     param([Parameter(Mandatory = $true)][int]$Port)
 
@@ -51,11 +90,14 @@ function Find-LlamaCppFreePort {
 function Wait-LlamaServer {
     param(
         [Parameter(Mandatory = $true)][int]$Port,
-        [int]$TimeoutSec
+        [int]$TimeoutSec,
+        [System.Diagnostics.Process]$Process,
+        [string]$OutLogPath,
+        [string]$ErrLogPath
     )
 
     if ($TimeoutSec -le 0) {
-        $TimeoutSec = if ($script:Cfg.Contains('LlamaCppHealthCheckTimeoutSec')) { [int]$script:Cfg.LlamaCppHealthCheckTimeoutSec } else { 120 }
+        $TimeoutSec = if ($script:Cfg.Contains('LlamaCppHealthCheckTimeoutSec')) { [int]$script:Cfg.LlamaCppHealthCheckTimeoutSec } else { 300 }
     }
 
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -63,6 +105,21 @@ function Wait-LlamaServer {
     $start = Get-Date
 
     while ((Get-Date) -lt $deadline) {
+        if ($Process) {
+            try { $Process.Refresh() } catch {}
+            if ($Process.HasExited) {
+                if ($progressShownAt) { Write-Host "" }
+
+                $tail = Get-LlamaServerLogTail -OutLogPath $OutLogPath -ErrLogPath $ErrLogPath
+                $logHint = if ($OutLogPath -or $ErrLogPath) { " Logs: $OutLogPath / $ErrLogPath." } else { "" }
+                $message = "llama-server exited before becoming healthy (exit code $($Process.ExitCode)).$logHint"
+                if (-not [string]::IsNullOrWhiteSpace($tail)) {
+                    $message += "`n$tail"
+                }
+                throw $message
+            }
+        }
+
         try {
             Invoke-WebRequest -Uri "http://127.0.0.1:$Port/v1/models" -UseBasicParsing -TimeoutSec 2 | Out-Null
             if ($progressShownAt) { Write-Host "" }
@@ -85,17 +142,43 @@ function Wait-LlamaServer {
     }
 
     if ($progressShownAt) { Write-Host "" }
-    throw "llama-server did not come up within ${TimeoutSec}s on port $Port."
+
+    $tail = Get-LlamaServerLogTail -OutLogPath $OutLogPath -ErrLogPath $ErrLogPath
+    $message = "llama-server did not come up within ${TimeoutSec}s on port $Port."
+    if ($OutLogPath -or $ErrLogPath) {
+        $message += " Logs: $OutLogPath / $ErrLogPath."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($tail)) {
+        $message += "`n$tail"
+    }
+    throw $message
 }
 
 function Start-LlamaServerNative {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$ServerPath,
-        [Parameter(Mandatory = $true)][string[]]$ServerArgs
+        [Parameter(Mandatory = $true)][string[]]$ServerArgs,
+        [string]$OutLogPath,
+        [string]$ErrLogPath
     )
 
-    $proc = Start-Process -FilePath $ServerPath -ArgumentList $ServerArgs -PassThru -WindowStyle Hidden -ErrorAction Stop
+    $startArgs = @{
+        FilePath      = $ServerPath
+        ArgumentList  = $ServerArgs
+        PassThru      = $true
+        WindowStyle   = 'Hidden'
+        ErrorAction   = 'Stop'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($OutLogPath)) {
+        $startArgs.RedirectStandardOutput = $OutLogPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ErrLogPath)) {
+        $startArgs.RedirectStandardError = $ErrLogPath
+    }
+
+    $proc = Start-Process @startArgs
     return $proc
 }
 

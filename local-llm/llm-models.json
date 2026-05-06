@@ -13,7 +13,7 @@
   "LlamaCppTurboquantRepo": "TheTom/llama-cpp-turboquant",
   "LlamaCppGgufRoot": "%USERPROFILE%\\.local-llm\\gguf",
   "LlamaCppDefaultMode": "native",
-  "LlamaCppHealthCheckTimeoutSec": 120,
+  "LlamaCppHealthCheckTimeoutSec": 300,
   "LlamaCppCoexistOllama": false,
   "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,ToolSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop",
   "Models": {

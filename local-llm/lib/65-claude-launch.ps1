@@ -599,7 +599,17 @@ function Start-ClaudeWithLlamaCppModel {
         Ensure-LlamaServerNative
     }
 
-    $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs
+    $logPaths = New-LlamaServerLogPaths
+
+    Write-Host ""
+    Write-Host "Starting llama-server for $($def.Root) via llama.cpp ($Mode)..." -ForegroundColor Cyan
+    Write-Host "  Server   : $serverPath" -ForegroundColor DarkGray
+    Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+    Write-Host "  Port     : $port" -ForegroundColor DarkGray
+    Write-Host "  Logs     : $($logPaths.Out)" -ForegroundColor DarkGray
+    Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
+
+    $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
 
     $session = @{
         Backend  = 'llamacpp'
@@ -609,12 +619,14 @@ function Start-ClaudeWithLlamaCppModel {
         Model    = $def.Root
         GgufPath = $ggufPath
         Pid      = $proc.Id
+        OutLog   = $logPaths.Out
+        ErrLog   = $logPaths.Err
     }
 
     Set-CurrentBackendSession -Session $session
 
     try {
-        Wait-LlamaServer -Port $port
+        Wait-LlamaServer -Port $port -Process $proc -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
     }
     catch {
         Stop-LlamaServer -Quiet

@@ -62,7 +62,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppTurboquantRepo"))        { $cfg.LlamaCppTurboquantRepo = "TheTom/llama-cpp-turboquant" }
     if (-not $cfg.ContainsKey("LlamaCppGgufRoot"))              { $cfg.LlamaCppGgufRoot = "%USERPROFILE%\\.local-llm\\gguf" }
     if (-not $cfg.ContainsKey("LlamaCppDefaultMode"))           { $cfg.LlamaCppDefaultMode = "native" }
-    if (-not $cfg.ContainsKey("LlamaCppHealthCheckTimeoutSec")) { $cfg.LlamaCppHealthCheckTimeoutSec = 120 }
+    if (-not $cfg.ContainsKey("LlamaCppHealthCheckTimeoutSec")) { $cfg.LlamaCppHealthCheckTimeoutSec = 300 }
     if (-not $cfg.ContainsKey("LlamaCppCoexistOllama"))         { $cfg.LlamaCppCoexistOllama = $false }
     if (-not $cfg.ContainsKey("LlamaCppNCpuMoe"))               { $cfg.LlamaCppNCpuMoe = 35 }
     if (-not $cfg.ContainsKey("LlamaCppMlock"))                 { $cfg.LlamaCppMlock = $true }
