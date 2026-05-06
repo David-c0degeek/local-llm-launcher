@@ -7,7 +7,7 @@ function Reload-LocalLLMConfig {
     $script:Cfg = Import-LocalLLMConfig
     $script:NoThinkProxyPort = [int]$script:Cfg.NoThinkProxyPort
     Register-ModelShortcuts
-    Write-Host "Reloaded local LLM config: $script:LocalLLMConfigPath" -ForegroundColor Green
+    Write-Host "Reloaded LocalBox config: $script:LocalLLMConfigPath" -ForegroundColor Green
 }
 
 function Get-ModelDef {

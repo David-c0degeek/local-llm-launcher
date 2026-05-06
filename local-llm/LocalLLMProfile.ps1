@@ -1,5 +1,5 @@
 # =========================
-# Local LLM profile entry point
+# LocalBox profile entry point
 # Ollama + Claude Code + Unshackled
 # Windows / PowerShell only — does not work in WSL/bash.
 # =========================

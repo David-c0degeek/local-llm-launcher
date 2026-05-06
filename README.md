@@ -1,15 +1,4 @@
-```
-██╗      ██████╗  ██████╗ █████╗ ██╗      ██╗     ██╗     ███╗   ███╗      ██╗      █████╗ ██╗   ██╗███╗   ██╗ ██████╗██╗  ██╗███████╗██████╗ 
-██║     ██╔═══██╗██╔════╝██╔══██╗██║      ██║     ██║     ████╗ ████║      ██║     ██╔══██╗██║   ██║████╗  ██║██╔════╝██║  ██║██╔════╝██╔══██╗
-██║     ██║   ██║██║     ███████║██║█████╗██║     ██║     ██╔████╔██║█████╗██║     ███████║██║   ██║██╔██╗ ██║██║     ███████║█████╗  ██████╔╝
-██║     ██║   ██║██║     ██╔══██║██║╚════╝██║     ██║     ██║╚██╔╝██║╚════╝██║     ██╔══██║██║   ██║██║╚██╗██║██║     ██╔══██║██╔══╝  ██╔══██╗
-███████╗╚██████╔╝╚██████╗██║  ██║███████╗ ███████╗███████╗██║ ╚═╝ ██║      ███████╗██║  ██║╚██████╔╝██║ ╚████║╚██████╗██║  ██║███████╗██║  ██║
-╚══════╝ ╚═════╝  ╚═════╝╚═╝  ╚═╝╚══════╝ ╚══════╝╚══════╝╚═╝     ╚═╝      ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
-
-                  Put a local LLM behind the Claude Code harness.
-```
-
-# local-llm-launcher
+# LocalBox
 
 A PowerShell-driven launcher that runs [Claude Code](https://claude.com/claude-code)
 (or the [Unshackled](https://github.com/David-c0degeek/unshackled) fork) against a
@@ -24,7 +13,7 @@ KV-cache type, sampling, system prompt, and tool allowlist for each model family
 
 ## Related projects
 
-- [LocalLLMLauncher](https://github.com/David-c0degeek/local-llm-launcher) is
+- [LocalBox](https://github.com/David-c0degeek/LocalBox) is
   this launcher: it runs local Ollama and llama.cpp models through Claude Code
   or Unshackled.
 - [BenchPilot](https://github.com/David-c0degeek/benchpilot) is the companion

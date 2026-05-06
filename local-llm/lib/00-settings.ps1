@@ -40,7 +40,7 @@ function Import-LocalLLMSettings {
 
 function Import-LocalLLMConfig {
     if (-not (Test-Path $script:LocalLLMConfigPath)) {
-        throw "Local LLM config not found: $script:LocalLLMConfigPath"
+        throw "LocalBox config not found: $script:LocalLLMConfigPath"
     }
 
     $cfg = Get-Content -Raw -Path $script:LocalLLMConfigPath | ConvertFrom-Json -AsHashtable

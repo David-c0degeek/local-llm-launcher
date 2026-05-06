@@ -11,7 +11,7 @@ function Initialize-LocalLLM {
     )
 
     Write-Host ""
-    Write-Host "=== Local LLM Setup ===" -ForegroundColor Green
+    Write-Host "=== LocalBox Setup ===" -ForegroundColor Green
     Write-Host ""
 
     if (-not (Test-OllamaVersionMinimum -MinVersion $script:Cfg.MinOllamaVersion)) {

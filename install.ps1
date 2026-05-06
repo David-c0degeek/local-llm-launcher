@@ -1,4 +1,4 @@
-# Install local-llm-launcher to %USERPROFILE%\.local-llm and %USERPROFILE%\.ollama-proxy.
+# Install LocalBox to %USERPROFILE%\.local-llm and %USERPROFILE%\.ollama-proxy.
 #
 # Modes:
 #   .\install.ps1                  copy files (default)
@@ -406,7 +406,7 @@ function Show-Diagnostics {
 # ---- main ----
 
 Write-Host ""
-Write-Host "local-llm-launcher install" -ForegroundColor Cyan
+Write-Host "LocalBox install" -ForegroundColor Cyan
 Write-Host "  Repo     : $RepoRoot"
 Write-Host "  Mode     : $(if ($Symlink) { 'symlink' } else { 'copy' })$(if ($DryRun) { ' (dry-run)' } else { '' })"
 Write-Host ""

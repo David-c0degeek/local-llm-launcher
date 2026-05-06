@@ -512,6 +512,39 @@ function Test-LlamaCppWizardAutoBestAvailable {
     }
 }
 
+function Select-LlamaCppLaunchSettingsMode {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+    )
+
+    $entry = $null
+    try { $entry = Get-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode } catch { $entry = $null }
+
+    if (-not $entry -or -not $entry.overrides) {
+        return 'manual'
+    }
+
+    $score = if ($entry.score) { "score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
+    $items = @(
+        [pscustomobject]@{ Key = 'best';   Label = 'Use best';        Description = "Apply saved AutoBest settings ($score)" },
+        [pscustomobject]@{ Key = 'manual'; Label = 'Manual settings'; Description = 'Pick KV cache and launch settings now' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Launch settings" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
+
+    if ($idx -lt 0) { return $null }
+    return [string]$items[$idx].Key
+}
+
 function Invoke-LLMSelection {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -618,7 +651,7 @@ function Start-LLMWizardClassic {
         switch ($step) {
             'model' {
                 Clear-Host
-                Write-Host "Local LLM launcher" -ForegroundColor Green
+                Write-Host "LocalBox" -ForegroundColor Green
                 Write-Host "Config: $script:LocalLLMConfigPath" -ForegroundColor DarkGray
 
                 $modelKey = Select-LLMModelKey
@@ -689,14 +722,7 @@ function Start-LLMWizardClassic {
                 }
                 if ($action -in @("chat", "fc", "claude")) {
                     if ($backend -eq 'llamacpp') {
-                        $useAutoBest = Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode
-                        if ($useAutoBest) {
-                            $kvK = $null
-                            $kvV = $null
-                            $step = 'launch'
-                        } else {
-                            $step = 'kvcache'
-                        }
+                        $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {
                         $step = 'q8'
                     }
@@ -704,6 +730,21 @@ function Start-LLMWizardClassic {
                     $useAutoBest = $false
                     $step = 'launch'
                 }
+            }
+
+            'llamacppsettings' {
+                $modeChoice = Select-LlamaCppLaunchSettingsMode -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode
+                if ($null -eq $modeChoice) { $step = 'action'; break }
+                if ($modeChoice -eq 'best') {
+                    $kvK = $null
+                    $kvV = $null
+                    $useAutoBest = $true
+                    $step = 'launch'
+                    break
+                }
+
+                $useAutoBest = $false
+                $step = 'kvcache'
             }
 
             'q8' {
@@ -745,7 +786,7 @@ function Start-LLMWizardClassic {
 # $env:LOCAL_LLM_NO_SPECTRE=1 forces the classic wizard even when Spectre is installed).
 
 function Show-LLMWizardHeaderSpectre {
-    Format-SpectrePanel -Header "Local LLM launcher" -Color Green -Data ("[grey50]Config:[/] {0}" -f (ConvertTo-LocalLLMSpectreSafe $script:LocalLLMConfigPath)) | Out-Host
+    Format-SpectrePanel -Header "LocalBox" -Color Green -Data ("[grey50]Config:[/] {0}" -f (ConvertTo-LocalLLMSpectreSafe $script:LocalLLMConfigPath)) | Out-Host
 }
 
 function Select-LLMModelKeySpectre {
@@ -883,6 +924,34 @@ function Select-LLMActionSpectre {
 
     if ($value -eq '__back__') { return $null }
     return $value
+}
+
+function Select-LlamaCppLaunchSettingsModeSpectre {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+    )
+
+    $entry = $null
+    try { $entry = Get-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode } catch { $entry = $null }
+
+    if (-not $entry -or -not $entry.overrides) {
+        return 'manual'
+    }
+
+    $score = if ($entry.score) { "score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
+    $scoreSafe = ConvertTo-LocalLLMSpectreSafe $score
+    $choices = [ordered]@{
+        "Use best        -  Apply saved AutoBest settings ($scoreSafe)" = 'best'
+        "Manual settings -  Pick KV cache and launch settings now"      = 'manual'
+        "[[Back]]"                                                      = '__back__'
+    }
+
+    $chosen = Read-SpectreSelection -Message "Launch settings" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return $null }
+    if ($chosen -eq '[[Back]]') { return $null }
+    return [string]$choices[$chosen]
 }
 
 function Select-LLMBackendSpectre {
@@ -1188,14 +1257,7 @@ function Start-LLMWizardSpectre {
                 }
                 if ($action -in @("chat", "fc", "claude")) {
                     if ($backend -eq 'llamacpp') {
-                        $useAutoBest = Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode
-                        if ($useAutoBest) {
-                            $kvK = $null
-                            $kvV = $null
-                            $step = 'launch'
-                        } else {
-                            $step = 'kvcache'
-                        }
+                        $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {
                         $step = 'q8'
                     }
@@ -1203,6 +1265,26 @@ function Start-LLMWizardSpectre {
                     $useAutoBest = $false
                     $step = 'launch'
                 }
+            }
+
+            'llamacppsettings' {
+                $capturedModel = $modelKey
+                $capturedContext = $contextKey
+                $capturedMode = $llamaCppMode
+                $modeChoice = Invoke-LLMWizardStep -Context "llamacpp-settings ($modelKey/$contextKey/$llamaCppMode)" -Default $null -Action {
+                    Select-LlamaCppLaunchSettingsModeSpectre -ModelKey $capturedModel -ContextKey $capturedContext -Mode $capturedMode
+                }
+                if ($null -eq $modeChoice) { $step = 'action'; break }
+                if ($modeChoice -eq 'best') {
+                    $kvK = $null
+                    $kvV = $null
+                    $useAutoBest = $true
+                    $step = 'launch'
+                    break
+                }
+
+                $useAutoBest = $false
+                $step = 'kvcache'
             }
 
             'q8' {

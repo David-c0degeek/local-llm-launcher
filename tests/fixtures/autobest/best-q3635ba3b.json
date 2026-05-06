@@ -2,13 +2,13 @@
   "key": "q3635ba3b",
   "schema": 1,
   "source": "benchpilot",
-  "schema_version": "localllmlauncher-autobest-v1",
+  "schema_version": "localbox-autobest-v1",
   "benchpilot_version": "0.1.0",
   "launcher_export_version": 1,
   "entries": [
     {
       "source": "benchpilot",
-      "schema_version": "localllmlauncher-autobest-v1",
+      "schema_version": "localbox-autobest-v1",
       "benchpilot_version": "0.1.0",
       "launcher_export_version": 1,
       "benchpilot_profile_path": "~/.local-llm/benchpilot/profiles/q3635ba3b-native-fast-short.json",

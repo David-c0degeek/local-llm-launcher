@@ -559,7 +559,7 @@ function Show-LLMProfileInfo {
     param([switch]$All)
 
     Clear-Host
-    Write-Host "Local LLM dashboard" -ForegroundColor Green
+    Write-Host "LocalBox dashboard" -ForegroundColor Green
 
     Show-ClaudeTarget
     Show-OllamaStatus -All:$All

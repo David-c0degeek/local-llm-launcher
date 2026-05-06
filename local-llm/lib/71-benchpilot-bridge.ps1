@@ -187,7 +187,7 @@ function Invoke-BenchPilotLauncherFindBest {
     }
 
     Find-BenchPilotBestConfig `
-        -Target LocalLLMLauncher `
+        -Target LocalBox `
         -Runtime llamacpp `
         -Key $Key `
         -ContextKey $ContextKey `
@@ -221,7 +221,7 @@ function Get-BenchPilotLauncherBestConfig {
         throw "BenchPilot is available, but Get-BenchPilotBestConfig is not implemented by this version."
     }
 
-    Get-BenchPilotBestConfig -Target LocalLLMLauncher -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant
+    Get-BenchPilotBestConfig -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant
 }
 
 function Get-BenchPilotLauncherBestConfigCandidates {
@@ -239,7 +239,7 @@ function Get-BenchPilotLauncherBestConfigCandidates {
         throw "BenchPilot is available, but Get-BenchPilotBestConfigCandidates is not implemented by this version."
     }
 
-    Get-BenchPilotBestConfigCandidates -Target LocalLLMLauncher -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant
+    Get-BenchPilotBestConfigCandidates -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant
 }
 
 function Show-BenchPilotLauncherHistory {
@@ -254,7 +254,7 @@ function Show-BenchPilotLauncherHistory {
         throw "BenchPilot is available, but Show-BenchPilotHistory is not implemented by this version."
     }
 
-    Show-BenchPilotHistory -Target LocalLLMLauncher -Runtime llamacpp -Key $Key -Last $Last
+    Show-BenchPilotHistory -Target LocalBox -Runtime llamacpp -Key $Key -Last $Last
 }
 
 function Show-BenchPilotLauncherStatus {

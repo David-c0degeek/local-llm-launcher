@@ -1,4 +1,4 @@
-# LocalLLMLauncher AutoBest Profile Contract
+# LocalBox AutoBest Profile Contract
 
 `Start-ClaudeWithLlamaCppModel -AutoBest` loads saved launcher profiles from:
 
@@ -6,7 +6,7 @@
 ~/.local-llm/tuner/best-<key>.json
 ```
 
-The current compatibility schema is `localllmlauncher-autobest-v1`. The top
+The current compatibility schema is `localbox-autobest-v1`. The top
 level object keeps launcher-owned routing fields and an `entries` array. Each
 entry is matched by `Get-BestLlamaCppConfig` using:
 
