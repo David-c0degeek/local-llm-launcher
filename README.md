@@ -21,6 +21,19 @@ KV-cache type, sampling, system prompt, and tool allowlist for each model family
 
 ---
 
+## Related projects
+
+- [LocalLLMLauncher](https://github.com/David-c0degeek/local-llm-launcher) is
+  this launcher: it runs local Ollama and llama.cpp models through Claude Code
+  or Unshackled.
+- [BenchPilot](https://github.com/David-c0degeek/benchpilot) is the companion
+  optimizer: it benchmarks local models and exports recommended launcher
+  profiles.
+- [Unshackled](https://github.com/David-c0degeek/unshackled) is the free Claude
+  Code fork that the launcher can target with `-Fc` / `-Unshackled`.
+
+---
+
 ## What this is
 
 The vendored Anthropic models (Opus, Sonnet, Haiku) are good. They're also paid,
