@@ -4,7 +4,7 @@
   "KeepAlive": "-1",
   "OllamaAppPath": "%LOCALAPPDATA%\\Programs\\Ollama\\ollama app.exe",
   "OllamaCommunityRoot": "%USERPROFILE%\\.ollama-community",
-  "UnshackledRoot": "D:\\repos\\unshackled",
+  "UnshackledRoot": "%USERPROFILE%\\.local-llm\\tools\\unshackled",
   "RequireAdvertisedTools": true,
   "NoThinkProxyPort": 11435,
   "LlamaCppPort": 8080,

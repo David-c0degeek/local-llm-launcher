@@ -476,7 +476,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in {"/", "/health", "/healthz"}:
-            self._send_plain(200, "ok")
+            body = json.dumps(
+                {
+                    "status": "ok",
+                    "target_host": TARGET_HOST,
+                    "target_port": TARGET_PORT,
+                    "target": f"{TARGET_HOST}:{TARGET_PORT}",
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            try:
+                self.wfile.write(body)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
             return
 
         self._forward("GET")

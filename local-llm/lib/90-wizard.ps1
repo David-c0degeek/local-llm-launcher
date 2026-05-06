@@ -391,6 +391,26 @@ function Read-LLMTuneDepth {
     return [string]$items[$idx].Key
 }
 
+function Read-LLMTuneOptimize {
+    $items = @(
+        [pscustomobject]@{ Key = 'both';   Label = 'Balanced';   Description = 'Prompt/prefill and generation throughput' },
+        [pscustomobject]@{ Key = 'prompt'; Label = 'Prefill';    Description = 'Prioritize first-token latency on large prompts' },
+        [pscustomobject]@{ Key = 'gen';    Label = 'Generation'; Description = 'Prioritize tokens/sec after generation starts' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Tune goal" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
+
+    if ($idx -lt 0) { return $null }
+    return [string]$items[$idx].Key
+}
+
 function Invoke-LlamaCppTunerWizardFlow {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -406,6 +426,13 @@ function Invoke-LlamaCppTunerWizardFlow {
     }
     if ([string]::IsNullOrWhiteSpace($depth)) { return }
     $useDeep = $depth -eq 'deep'
+
+    $optimize = if ($UseSpectrePrompts) {
+        Read-LLMTuneOptimizeSpectre
+    } else {
+        Read-LLMTuneOptimize
+    }
+    if ([string]::IsNullOrWhiteSpace($optimize)) { return }
 
     $allowKv = if ($UseSpectrePrompts) {
         Read-LLMTuneKvVariationSpectre
@@ -424,7 +451,7 @@ function Invoke-LlamaCppTunerWizardFlow {
         }
     }
 
-    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AllowedKvTypes $allowedKvTypes -Deep:$useDeep -NoSave
+    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AllowedKvTypes $allowedKvTypes -Deep:$useDeep -Optimize $optimize -NoSave
 
     Write-Host ""
     Write-Host "Best tuner result:" -ForegroundColor Green
@@ -481,7 +508,30 @@ function Invoke-LlamaCppTunerWizardFlow {
         Read-LLMYesNo -Prompt "Launch immediately with the new config?" -DefaultYes:$true
     }
     if ($launchAnswer) {
-        Start-ClaudeWithLlamaCppModel -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AutoBest
+        if (-not $saveAnswer) {
+            Write-Warning "Launch skipped: launching with the new config requires saving it first."
+            return
+        }
+
+        $launchAction = if ($UseSpectrePrompts) {
+            Select-LlamaCppPostTuneLaunchActionSpectre
+        } else {
+            Select-LlamaCppPostTuneLaunchAction
+        }
+        if ([string]::IsNullOrWhiteSpace($launchAction)) { return }
+
+        $launchArgs = @{
+            Key             = $ModelKey
+            ContextKey      = $ContextKey
+            Mode            = $Mode
+            AutoBest        = $true
+            AutoBestProfile = if ($result.PromptLength) { [string]$result.PromptLength } else { 'short' }
+        }
+        if ($launchAction -eq 'fc') {
+            $launchArgs.Unshackled = $true
+        }
+
+        Start-ClaudeWithLlamaCppModel @launchArgs
     }
 }
 
@@ -567,6 +617,25 @@ function Select-LlamaCppLaunchSettingsMode {
         -Title "Launch settings" `
         -Items $items `
         -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
+
+    if ($idx -lt 0) { return $null }
+    return [string]$items[$idx].Key
+}
+
+function Select-LlamaCppPostTuneLaunchAction {
+    $items = @(
+        [pscustomobject]@{ Key = 'claude'; Label = 'Claude Code'; Description = 'Local model behind Claude Code' },
+        [pscustomobject]@{ Key = 'fc';     Label = 'Unshackled';   Description = 'Local agent via Unshackled' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Launch target" `
+        -Items $items `
+        -ZeroLabel "Cancel" `
         -Label {
             param($item, $i)
             "$($item.Label)  -  $($item.Description)"
@@ -985,6 +1054,19 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
     return [string]$choices[$chosen]
 }
 
+function Select-LlamaCppPostTuneLaunchActionSpectre {
+    $choices = [ordered]@{
+        "Claude Code  -  Local model behind Claude Code" = 'claude'
+        "Unshackled   -  Local agent via Unshackled"     = 'fc'
+        "[[Cancel]]"                                    = '__cancel__'
+    }
+
+    $chosen = Read-SpectreSelection -Message "Launch target" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return $null }
+    if ($chosen -eq '[[Cancel]]') { return $null }
+    return [string]$choices[$chosen]
+}
+
 function Select-LLMBackendSpectre {
     # Returns 'ollama', 'llamacpp-native', 'llamacpp-turboquant', or $null (back).
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
@@ -1114,6 +1196,19 @@ function Read-LLMTuneDepthSpectre {
         '[[Back]]'                                    = '__back__'
     }
     $chosen = Read-SpectreSelection -Message "Tune depth" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return $null }
+    if ($chosen -eq '[[Back]]') { return $null }
+    return [string]$choices[$chosen]
+}
+
+function Read-LLMTuneOptimizeSpectre {
+    $choices = [ordered]@{
+        'Balanced   - prompt/prefill and generation throughput'       = 'both'
+        'Prefill    - prioritize first-token latency on large prompts' = 'prompt'
+        'Generation - prioritize tokens/sec after generation starts'   = 'gen'
+        '[[Back]]'                                                     = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Tune goal" -Choices @($choices.Keys) -PageSize 6
     if ($null -eq $chosen) { return $null }
     if ($chosen -eq '[[Back]]') { return $null }
     return [string]$choices[$chosen]

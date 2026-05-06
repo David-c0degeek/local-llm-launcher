@@ -221,14 +221,24 @@ function Test-BenchPilotCheckout {
     param([string]$Root)
 
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
-    return (Test-Path (Join-Path $Root "src\BenchPilot.psm1"))
+    try {
+        return (Test-Path -LiteralPath (Join-Path $Root "src\BenchPilot.psm1") -PathType Leaf -ErrorAction SilentlyContinue)
+    }
+    catch {
+        return $false
+    }
 }
 
 function Test-UnshackledCheckout {
     param([string]$Root)
 
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
-    return (Test-Path (Join-Path $Root "src\entrypoints\cli.tsx"))
+    try {
+        return (Test-Path -LiteralPath (Join-Path $Root "src\entrypoints\cli.tsx") -PathType Leaf -ErrorAction SilentlyContinue)
+    }
+    catch {
+        return $false
+    }
 }
 
 function Find-BenchPilotInstall {
@@ -242,7 +252,6 @@ function Find-BenchPilotInstall {
     if ($module) { return [pscustomobject]@{ Source = "module"; Root = $module.ModuleBase } }
 
     $candidates += $ManagedBenchPilotRoot
-    $candidates += "D:\repos\benchpilot"
 
     foreach ($candidate in $candidates) {
         if (Test-BenchPilotCheckout -Root $candidate) {
@@ -261,7 +270,6 @@ function Find-UnshackledInstall {
     if ($settings.Contains("UnshackledRoot")) { $candidates += [string]$settings.UnshackledRoot }
     if ($catalog.Contains("UnshackledRoot")) { $candidates += [string]$catalog.UnshackledRoot }
     $candidates += $ManagedUnshackledRoot
-    $candidates += "D:\repos\unshackled"
 
     foreach ($candidate in $candidates) {
         if (Test-UnshackledCheckout -Root $candidate) {

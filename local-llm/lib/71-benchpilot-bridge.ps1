@@ -8,7 +8,9 @@ function Resolve-BenchPilotModulePath {
     if ([string]::IsNullOrWhiteSpace($Root)) { return $null }
 
     $expanded = Expand-LocalLLMPath $Root
-    if (Test-Path -LiteralPath $expanded -PathType Leaf) {
+    if (-not (Test-Path -LiteralPath $expanded -ErrorAction SilentlyContinue)) { return $null }
+
+    if (Test-Path -LiteralPath $expanded -PathType Leaf -ErrorAction SilentlyContinue) {
         $leaf = Split-Path -Leaf $expanded
         if ($leaf -in @('BenchPilot.psm1', 'BenchPilot.psd1')) {
             return (Resolve-Path -LiteralPath $expanded).Path
@@ -22,7 +24,7 @@ function Resolve-BenchPilotModulePath {
     )
 
     foreach ($path in $candidates) {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
+        if (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction SilentlyContinue) {
             return (Resolve-Path -LiteralPath $path).Path
         }
     }
@@ -51,7 +53,6 @@ function Resolve-BenchPilotRoot {
 
     $managed = Join-Path $HOME '.local-llm\tools\benchpilot'
     $candidates.Add([pscustomobject]@{ Source = 'managed'; Root = $managed; ModulePath = $null }) | Out-Null
-    $candidates.Add([pscustomobject]@{ Source = 'dev'; Root = 'D:\repos\benchpilot'; ModulePath = $null }) | Out-Null
 
     foreach ($candidate in $candidates) {
         $modulePath = if ($candidate.ModulePath) { $candidate.ModulePath } else { Resolve-BenchPilotModulePath -Root $candidate.Root }
@@ -282,7 +283,7 @@ function Show-BenchPilotLauncherStatus {
     else {
         Write-Host "BenchPilot : not found" -ForegroundColor DarkGray
         Write-Host "Fallback   : legacy tuner $($(if ($script:Cfg.BenchPilotAllowLegacyFallback) { 'enabled' } else { 'disabled' }))" -ForegroundColor DarkGray
-        Write-Host "Configure  : setllm BenchPilotRoot D:\repos\benchpilot" -ForegroundColor DarkGray
+        Write-Host "Configure  : setllm BenchPilotRoot <path-to-benchpilot>" -ForegroundColor DarkGray
     }
 
     return $status

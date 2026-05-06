@@ -5,6 +5,44 @@
 $script:ClaudeEnvBackup = @{}
 $script:NoThinkProxyProcess = $null
 
+function Get-NoThinkProxyHealth {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 1 -ErrorAction Stop
+        $content = [string]$response.Content
+        try {
+            return ($content | ConvertFrom-Json -AsHashtable)
+        }
+        catch {
+            return @{ status = $content }
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-NoThinkProxyTarget {
+    param(
+        [Parameter(Mandatory = $true)][int]$ListenPort,
+        [Parameter(Mandatory = $true)][string]$TargetHost,
+        [Parameter(Mandatory = $true)][int]$TargetPort
+    )
+
+    $health = Get-NoThinkProxyHealth -Port $ListenPort
+    if (-not $health) { return $null }
+
+    $healthHost = if ($health.Contains('target_host')) { [string]$health.target_host } else { '' }
+    $healthPort = if ($health.Contains('target_port')) { try { [int]$health.target_port } catch { 0 } } else { 0 }
+
+    if ($healthHost -eq $TargetHost -and $healthPort -eq $TargetPort) {
+        return $true
+    }
+
+    return $false
+}
+
 function Save-ClaudeEnvBackup {
     $script:ClaudeEnvBackup = @{}
 
@@ -82,6 +120,15 @@ function Start-NoThinkProxy {
         [string]$TargetHost = "127.0.0.1"
     )
 
+    $target = "${TargetHost}:${TargetPort}"
+    $targetMatches = Test-NoThinkProxyTarget -ListenPort $script:NoThinkProxyPort -TargetHost $TargetHost -TargetPort $TargetPort
+    if ($targetMatches -eq $true) {
+        return
+    }
+    if ($targetMatches -eq $false) {
+        throw "No-think proxy port $($script:NoThinkProxyPort) is already in use by a proxy for a different or unverifiable target. Stop that process or change NoThinkProxyPort."
+    }
+
     if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
         return
     }
@@ -89,29 +136,29 @@ function Start-NoThinkProxy {
     $proxyScript = Join-Path $HOME ".ollama-proxy\no-think-proxy.py"
 
     if (-not (Test-Path $proxyScript)) {
-        Write-Warning "No-think proxy not found: $proxyScript"
-        return
+        throw "No-think proxy not found: $proxyScript. Re-run install.ps1 so Claude/Unshackled launches do not point at a dead proxy URL."
     }
-
-    $target = "${TargetHost}:${TargetPort}"
 
     $script:NoThinkProxyProcess = Start-Process python `
         -ArgumentList "`"$proxyScript`"", $script:NoThinkProxyPort, $target `
         -PassThru -WindowStyle Hidden -ErrorAction Stop
 
     $deadline = (Get-Date).AddSeconds(3)
+    $ready = $false
 
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 150
 
-        try {
-            $tcp = New-Object System.Net.Sockets.TcpClient
-            $tcp.Connect("127.0.0.1", $script:NoThinkProxyPort)
-            $tcp.Close()
+        $targetMatches = Test-NoThinkProxyTarget -ListenPort $script:NoThinkProxyPort -TargetHost $TargetHost -TargetPort $TargetPort
+        if ($targetMatches -eq $true) {
+            $ready = $true
             break
         }
-        catch {
-        }
+    }
+
+    if (-not $ready) {
+        Stop-NoThinkProxy
+        throw "No-think proxy did not become ready on 127.0.0.1:$($script:NoThinkProxyPort) for target $target."
     }
 }
 
@@ -132,10 +179,20 @@ function Ensure-UnshackledInstalled {
         throw "UnshackledRoot is not set. Run: Set-LocalLLMSetting UnshackledRoot '<path>'"
     }
 
-    $cliPath = Join-Path $root "src\entrypoints\cli.tsx"
+    $cliPath = try {
+        Join-Path $root "src\entrypoints\cli.tsx"
+    }
+    catch {
+        throw "UnshackledRoot is not accessible: $root. Run: Set-LocalLLMSetting UnshackledRoot '<path>'"
+    }
 
-    if (Test-Path $cliPath) {
+    if (Test-Path -LiteralPath $cliPath -PathType Leaf -ErrorAction SilentlyContinue) {
         return
+    }
+
+    $qualifier = Split-Path -Qualifier $root
+    if (-not [string]::IsNullOrWhiteSpace($qualifier) -and -not (Test-Path -LiteralPath $qualifier -ErrorAction SilentlyContinue)) {
+        throw "UnshackledRoot points at an unavailable drive or path: $root. Run: Set-LocalLLMSetting UnshackledRoot '<path>'"
     }
 
     $repoUrl = if (-not [string]::IsNullOrWhiteSpace($script:Cfg.UnshackledRepoUrl)) {
@@ -581,7 +638,7 @@ function Start-ClaudeWithLlamaCppModel {
     }
 
     try {
-        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking $false
+        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:(-not $useNoThinkProxy)
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
