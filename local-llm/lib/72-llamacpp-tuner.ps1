@@ -1,10 +1,12 @@
 # Per-machine llama.cpp auto-tuner. Searches the perf-only parameter space for
 # the highest-throughput launch config without touching anything that could
 # change generations (quant, context, KV cache types stay locked unless the
-# user explicitly widens). T1 ships baseline + MoE/ngl + batching only;
-# flash-attn / mlock / threads / KV phases land in T2.
+# user explicitly widens). Full tuner uses a server fidelity baseline/final
+# check and the llama-bench fast path for coarse perf-only phases when present.
 
-$script:LlamaCppTunerVersion = 1
+$script:LlamaCppTunerVersion = 3
+$script:LlamaCppCoarseMode = 'server'
+$script:LlamaCppTrialDriverByPhase = @{}
 
 # Fixed prompt + n_predict so cross-trial / cross-run numbers stay comparable.
 # Length: ~280 tokens. Tuned to hit a representative mid-range prefill so
@@ -23,9 +25,11 @@ focused, clear, and around 350 words.
 "@
 
 $script:LlamaCppTunerNPredict = 256
+$script:LlamaCppTunerPromptProfile = 'short'
+$script:LlamaCppTunerBenchPromptTokens = 512
 
-# OOM markers from llama-server stderr / stdout. Match case-insensitively.
-$script:LlamaCppOomPatterns = @(
+# Failure markers from llama-server / llama-bench stderr/stdout. Match case-insensitively.
+$script:LlamaCppFailurePatterns = @(
     'cuda error: out of memory',
     'cudaerror_outofmemory',
     'failed to allocate',
@@ -33,7 +37,9 @@ $script:LlamaCppOomPatterns = @(
     'vulkan.*out of memory',
     'cublasstatus_alloc_failed',
     'cudamalloc.*failed',
-    'unable to allocate'
+    'unable to allocate',
+    'failed to lock',
+    'mlockall failed'
 )
 
 function Get-LlamaCppTunerRoot {
@@ -58,11 +64,38 @@ function Test-LlamaCppOomMessage {
     if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
     $lower = $Text.ToLowerInvariant()
 
-    foreach ($pat in $script:LlamaCppOomPatterns) {
+    foreach ($pat in $script:LlamaCppFailurePatterns) {
         if ($lower -match $pat) { return $true }
     }
 
     return $false
+}
+
+function Test-LlamaCppFailureMessage {
+    param([AllowEmptyString()][string]$Text)
+    return (Test-LlamaCppOomMessage -Text $Text)
+}
+
+function Get-LlamaCppBuildStamp {
+    param([ValidateSet('native','turboquant')][string]$Mode = 'native')
+
+    $root = if ($Mode -eq 'turboquant') { Get-LlamaCppTurboquantInstallRoot } else { Get-LlamaCppInstallRoot }
+    $path = Join-Path $root ".build-stamp"
+    if (-not (Test-Path $path)) { return '' }
+
+    try { return (Get-Content -Raw -Path $path -ErrorAction Stop).Trim() }
+    catch { return '' }
+}
+
+function Get-LlamaCppGpuNames {
+    if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) { return @() }
+
+    try {
+        return @(& nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    catch {
+        return @()
+    }
 }
 
 function Read-LlamaCppStderrTail {
@@ -136,6 +169,331 @@ function Resolve-LlamaCppTunerSearchSpace {
 
 function Get-LlamaCppTrialPrompt {
     return @{ Prompt = $script:LlamaCppTunerPrompt; NPredict = $script:LlamaCppTunerNPredict }
+}
+
+function Set-LlamaCppTunerPromptProfile {
+    param([ValidateSet('short','long')][string]$Profile = 'short')
+
+    $script:LlamaCppTunerPromptProfile = $Profile
+    if ($Profile -eq 'long') {
+        $fixture = Get-LlamaCppPerplexityFixturePath
+        $base = if ($fixture -and (Test-Path $fixture)) {
+            Get-Content -Raw -Path $fixture
+        } else {
+            $script:LlamaCppTunerPrompt
+        }
+        $chunks = New-Object System.Collections.Generic.List[string]
+        for ($i = 0; $i -lt 80; $i++) { $chunks.Add($base) | Out-Null }
+        $script:LlamaCppTunerPrompt = ($chunks -join "`n`n")
+        $script:LlamaCppTunerBenchPromptTokens = 16384
+        return
+    }
+
+    $script:LlamaCppTunerPrompt = @"
+You are a senior performance engineer. Explain in detail why
+the size of the physical batch (ubatch) matters for prompt-eval
+throughput on a CUDA GPU running llama.cpp, and why pushing the
+logical batch (batch) too high stops helping. Cover: cache
+locality, kernel launch overhead, the cost of host->device
+copies, KV-cache fill ordering, and how flash-attention's
+fused kernels interact with batch size. Then give a short
+checklist a developer can use to pick a good (ubatch, batch)
+pair for a 24 GB single-GPU workstation. Keep the response
+focused, clear, and around 350 words.
+"@
+    $script:LlamaCppTunerBenchPromptTokens = 512
+}
+
+function Get-LlamaCppMedian {
+    param([double[]]$Values)
+
+    if (-not $Values -or $Values.Count -eq 0) { return 0.0 }
+    $sorted = @($Values | Sort-Object)
+    $n = $sorted.Count
+    if ($n % 2 -eq 1) { return [double]$sorted[[Math]::Floor($n / 2)] }
+    return ([double]$sorted[($n / 2) - 1] + [double]$sorted[$n / 2]) / 2.0
+}
+
+function Copy-LlamaCppOverrides {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Overrides)
+
+    $copy = [ordered]@{}
+    foreach ($k in $Overrides.Keys) {
+        $copy[$k] = $Overrides[$k]
+    }
+    return $copy
+}
+
+function Join-LlamaCppOverrides {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Base,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Overlay
+    )
+
+    $copy = Copy-LlamaCppOverrides -Overrides $Base
+    foreach ($k in $Overlay.Keys) {
+        $copy[$k] = $Overlay[$k]
+    }
+    return $copy
+}
+
+function Get-LlamaCppContextSizeForBench {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey
+    )
+
+    try { return [int](Get-ModelContextValue -Def $Def -ContextKey $ContextKey) }
+    catch { return 0 }
+}
+
+function Build-LlamaBenchArgs {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$ModelArgPath,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Overrides
+    )
+
+    $args = New-Object System.Collections.Generic.List[string]
+    $args.Add('-m') | Out-Null
+    $args.Add($ModelArgPath) | Out-Null
+
+    $ctx = Get-LlamaCppContextSizeForBench -Def $Def -ContextKey $ContextKey
+    if ($ctx -gt 0) {
+        $args.Add('-c') | Out-Null
+        $args.Add([string]$ctx) | Out-Null
+    }
+
+    $ngl = if ($Overrides.Contains('NGpuLayers') -and $null -ne $Overrides.NGpuLayers) {
+        [int]$Overrides.NGpuLayers
+    } elseif ($Def.Contains('NGpuLayers')) {
+        [int]$Def.NGpuLayers
+    } else { 999 }
+    $args.Add('-ngl') | Out-Null
+    $args.Add([string]$ngl) | Out-Null
+
+    $ncpuMoe = if ($Overrides.Contains('NCpuMoe') -and $null -ne $Overrides.NCpuMoe) {
+        [int]$Overrides.NCpuMoe
+    } elseif ($Def.Contains('NCpuMoe') -and $null -ne $Def.NCpuMoe) {
+        try { [int]$Def.NCpuMoe } catch { [int]$script:Cfg.LlamaCppNCpuMoe }
+    } else { [int]$script:Cfg.LlamaCppNCpuMoe }
+    if ($ncpuMoe -gt 0) {
+        $args.Add('-ncmoe') | Out-Null
+        $args.Add([string]$ncpuMoe) | Out-Null
+    }
+
+    if ($Overrides.Contains('UbatchSize') -and $Overrides.UbatchSize) {
+        $args.Add('-ub') | Out-Null
+        $args.Add([string][int]$Overrides.UbatchSize) | Out-Null
+    }
+    if ($Overrides.Contains('BatchSize') -and $Overrides.BatchSize) {
+        $args.Add('-b') | Out-Null
+        $args.Add([string][int]$Overrides.BatchSize) | Out-Null
+    }
+    if ($Overrides.Contains('Threads') -and $Overrides.Threads) {
+        $args.Add('-t') | Out-Null
+        $args.Add([string][int]$Overrides.Threads) | Out-Null
+    }
+    if ($Overrides.Contains('ThreadsBatch') -and $Overrides.ThreadsBatch) {
+        $args.Add('-tb') | Out-Null
+        $args.Add([string][int]$Overrides.ThreadsBatch) | Out-Null
+    }
+    if ($Overrides.Contains('FlashAttn') -and $null -ne $Overrides.FlashAttn) {
+        $args.Add('-fa') | Out-Null
+        $args.Add($(if ([bool]$Overrides.FlashAttn) { '1' } else { '0' })) | Out-Null
+    }
+    if ($Overrides.Contains('Mlock') -and [bool]$Overrides.Mlock) {
+        $args.Add('--mlock') | Out-Null
+    }
+    if ($Overrides.Contains('NoMmap') -and [bool]$Overrides.NoMmap) {
+        $args.Add('--no-mmap') | Out-Null
+    }
+
+    if ($Overrides.Contains('KvK') -and $Overrides.KvK) {
+        Test-LlamaCppKvType -Type $Overrides.KvK -Mode $Mode
+        $args.Add('-ctk') | Out-Null
+        $args.Add([string]$Overrides.KvK) | Out-Null
+    }
+    if ($Overrides.Contains('KvV') -and $Overrides.KvV) {
+        Test-LlamaCppKvType -Type $Overrides.KvV -Mode $Mode
+        $args.Add('-ctv') | Out-Null
+        $args.Add([string]$Overrides.KvV) | Out-Null
+    }
+
+    $args.Add('-p') | Out-Null
+    $args.Add([string]$script:LlamaCppTunerBenchPromptTokens) | Out-Null
+    $args.Add('-n') | Out-Null
+    $args.Add('128') | Out-Null
+    $args.Add('-o') | Out-Null
+    $args.Add('json') | Out-Null
+
+    return @($args)
+}
+
+function Read-LlamaBenchJsonRows {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+
+    try {
+        $parsed = $Text | ConvertFrom-Json
+        if ($parsed -is [array]) { return @($parsed) }
+        if ($parsed.data) { return @($parsed.data) }
+        if ($parsed.results) { return @($parsed.results) }
+        return @($parsed)
+    }
+    catch {
+        $rows = @()
+        foreach ($line in ($Text -split "`r?`n")) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $rows += ($line | ConvertFrom-Json) } catch {}
+        }
+        return @($rows)
+    }
+}
+
+function Get-LlamaBenchMetricValue {
+    param(
+        [Parameter(Mandatory = $true)]$Row,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    foreach ($name in $Names) {
+        $prop = $Row.PSObject.Properties[$name]
+        if ($prop -and $null -ne $prop.Value) {
+            try { return [double]$prop.Value } catch {}
+        }
+    }
+    return 0.0
+}
+
+function Get-LlamaCppPerplexityFixturePath {
+    $path = Join-Path (Split-Path -Parent $PSScriptRoot) "data\perplexity-fixture.txt"
+    if (Test-Path $path) { return $path }
+    return $null
+}
+
+function Build-LlamaPerplexityArgs {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$ModelArgPath,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Overrides,
+        [Parameter(Mandatory = $true)][string]$PromptFile
+    )
+
+    $args = New-Object System.Collections.Generic.List[string]
+    $args.Add('-m') | Out-Null
+    $args.Add($ModelArgPath) | Out-Null
+    $args.Add('-f') | Out-Null
+    $args.Add($PromptFile) | Out-Null
+
+    $ctx = Get-LlamaCppContextSizeForBench -Def $Def -ContextKey $ContextKey
+    if ($ctx -gt 0) {
+        $args.Add('-c') | Out-Null
+        $args.Add([string]$ctx) | Out-Null
+    }
+
+    $ngl = if ($Overrides.Contains('NGpuLayers') -and $null -ne $Overrides.NGpuLayers) {
+        [int]$Overrides.NGpuLayers
+    } elseif ($Def.Contains('NGpuLayers')) {
+        [int]$Def.NGpuLayers
+    } else { 999 }
+    $args.Add('-ngl') | Out-Null
+    $args.Add([string]$ngl) | Out-Null
+
+    if ($Overrides.Contains('NCpuMoe') -and $Overrides.NCpuMoe) {
+        $args.Add('-ncmoe') | Out-Null
+        $args.Add([string][int]$Overrides.NCpuMoe) | Out-Null
+    }
+    if ($Overrides.Contains('UbatchSize') -and $Overrides.UbatchSize) {
+        $args.Add('-ub') | Out-Null
+        $args.Add([string][int]$Overrides.UbatchSize) | Out-Null
+    }
+    if ($Overrides.Contains('BatchSize') -and $Overrides.BatchSize) {
+        $args.Add('-b') | Out-Null
+        $args.Add([string][int]$Overrides.BatchSize) | Out-Null
+    }
+    if ($Overrides.Contains('Threads') -and $Overrides.Threads) {
+        $args.Add('-t') | Out-Null
+        $args.Add([string][int]$Overrides.Threads) | Out-Null
+    }
+    if ($Overrides.Contains('ThreadsBatch') -and $Overrides.ThreadsBatch) {
+        $args.Add('-tb') | Out-Null
+        $args.Add([string][int]$Overrides.ThreadsBatch) | Out-Null
+    }
+    if ($Overrides.Contains('FlashAttn') -and $null -ne $Overrides.FlashAttn) {
+        $args.Add('-fa') | Out-Null
+        $args.Add($(if ([bool]$Overrides.FlashAttn) { '1' } else { '0' })) | Out-Null
+    }
+    if ($Overrides.Contains('Mlock') -and [bool]$Overrides.Mlock) {
+        $args.Add('--mlock') | Out-Null
+    }
+    if ($Overrides.Contains('NoMmap') -and [bool]$Overrides.NoMmap) {
+        $args.Add('--no-mmap') | Out-Null
+    }
+    if ($Overrides.Contains('KvK') -and $Overrides.KvK) {
+        Test-LlamaCppKvType -Type $Overrides.KvK -Mode $Mode
+        $args.Add('-ctk') | Out-Null
+        $args.Add([string]$Overrides.KvK) | Out-Null
+    }
+    if ($Overrides.Contains('KvV') -and $Overrides.KvV) {
+        Test-LlamaCppKvType -Type $Overrides.KvV -Mode $Mode
+        $args.Add('-ctv') | Out-Null
+        $args.Add([string]$Overrides.KvV) | Out-Null
+    }
+
+    return @($args)
+}
+
+function Invoke-LlamaCppPerplexity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$ModelArgPath,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Overrides,
+        [string]$PromptFile
+    )
+
+    if ($Mode -eq 'turboquant') { return $null }
+    if ([string]::IsNullOrWhiteSpace($PromptFile)) { $PromptFile = Get-LlamaCppPerplexityFixturePath }
+    if ([string]::IsNullOrWhiteSpace($PromptFile) -or -not (Test-Path $PromptFile)) { return $null }
+
+    $exe = $null
+    try { $exe = Ensure-LlamaPerplexityExe -NonInteractive } catch { $exe = $null }
+    if ([string]::IsNullOrWhiteSpace($exe) -or -not (Test-Path $exe)) { return $null }
+
+    $args = Build-LlamaPerplexityArgs -Def $Def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ModelArgPath -Overrides $Overrides -PromptFile $PromptFile
+    $logDir = Join-Path (Get-LlamaCppTunerRoot) 'logs'
+    Ensure-Directory $logDir
+    $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
+    $stderrPath = Join-Path $logDir "perplexity-$stamp-stderr.log"
+    $stdoutPath = Join-Path $logDir "perplexity-$stamp-stdout.log"
+
+    try {
+        $proc = Start-Process -FilePath $exe `
+            -ArgumentList $args `
+            -RedirectStandardError $stderrPath `
+            -RedirectStandardOutput $stdoutPath `
+            -PassThru -WindowStyle Hidden -Wait -ErrorAction Stop
+        if ($proc.ExitCode -ne 0) { return $null }
+    }
+    catch {
+        return $null
+    }
+
+    $text = (Read-LlamaCppStderrTail -Path $stdoutPath) + "`n" + (Read-LlamaCppStderrTail -Path $stderrPath)
+    $matches = [regex]::Matches($text, '(?i)(?:perplexity|ppl)\s*(?:=|:)\s*([0-9]+(?:\.[0-9]+)?)')
+    if ($matches.Count -eq 0) { return $null }
+
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+    return [double]$matches[$matches.Count - 1].Groups[1].Value
 }
 
 function Invoke-LlamaCppTrialServer {
@@ -276,16 +634,8 @@ function Invoke-LlamaCppTrialServer {
     $ppValues = @($samples | ForEach-Object { $_.pp_tps })
     $tgValues = @($samples | ForEach-Object { $_.tg_tps })
 
-    function Get-Median([double[]]$arr) {
-        if (-not $arr -or $arr.Count -eq 0) { return 0.0 }
-        $sorted = @($arr | Sort-Object)
-        $n = $sorted.Count
-        if ($n % 2 -eq 1) { return [double]$sorted[[Math]::Floor($n / 2)] }
-        return ([double]$sorted[($n / 2) - 1] + [double]$sorted[$n / 2]) / 2.0
-    }
-
-    $ppMedian = Get-Median $ppValues
-    $tgMedian = Get-Median $tgValues
+    $ppMedian = Get-LlamaCppMedian -Values $ppValues
+    $tgMedian = Get-LlamaCppMedian -Values $tgValues
 
     $variance = 0.0
     if ($tgValues.Count -ge 2) {
@@ -306,6 +656,100 @@ function Invoke-LlamaCppTrialServer {
         tg_tps     = [math]::Round($tgMedian, 2)
         variance   = [math]::Round($variance, 3)
         port       = $port
+        error      = $errorText
+        log_path   = if ($startupOk -and -not $oom) { $null } else { $stderrPath }
+    }
+}
+
+function Invoke-LlamaCppTrialBench {
+    # Runs one configured llama-bench process and returns the same trial shape
+    # as Invoke-LlamaCppTrialServer. Mainline only; turboquant falls back to server.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$ModelArgPath,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Overrides,
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [int]$Runs = 1,
+        [int]$WaitTimeoutSec
+    )
+
+    if ($Mode -eq 'turboquant') {
+        return (Invoke-LlamaCppTrialServer @PSBoundParameters)
+    }
+
+    $benchPath = $null
+    try { $benchPath = Ensure-LlamaBenchExe -NonInteractive } catch { $benchPath = $null }
+    if ([string]::IsNullOrWhiteSpace($benchPath) -or -not (Test-Path $benchPath)) {
+        return (Invoke-LlamaCppTrialServer @PSBoundParameters)
+    }
+
+    $benchArgs = Build-LlamaBenchArgs `
+        -Def $Def `
+        -ContextKey $ContextKey `
+        -Mode $Mode `
+        -ModelArgPath $ModelArgPath `
+        -Overrides $Overrides
+
+    $logDir = Join-Path (Get-LlamaCppTunerRoot) 'logs'
+    Ensure-Directory $logDir
+    $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
+    $stderrPath = Join-Path $logDir "trial-$stamp-bench-stderr.log"
+    $stdoutPath = Join-Path $logDir "trial-$stamp-bench-stdout.log"
+
+    $exitCode = $null
+    $errorText = $null
+    $oom = $false
+    $ppValues = @()
+    $tgValues = @()
+
+    try {
+        $proc = Start-Process -FilePath $benchPath `
+            -ArgumentList $benchArgs `
+            -RedirectStandardError $stderrPath `
+            -RedirectStandardOutput $stdoutPath `
+            -PassThru -WindowStyle Hidden -Wait -ErrorAction Stop
+        $exitCode = $proc.ExitCode
+    }
+    catch {
+        $errorText = $_.Exception.Message
+    }
+
+    $stdout = Read-LlamaCppStderrTail -Path $stdoutPath
+    $stderr = Read-LlamaCppStderrTail -Path $stderrPath
+    $rows = @(Read-LlamaBenchJsonRows -Text $stdout)
+
+    foreach ($row in $rows) {
+        $ppValues += (Get-LlamaBenchMetricValue -Row $row -Names @('pp_avg_ts','pp512','prompt_per_second','prompt_tps','pp_tps'))
+        $tgValues += (Get-LlamaBenchMetricValue -Row $row -Names @('tg_avg_ts','tg128','predicted_per_second','generation_tps','tg_tps'))
+    }
+
+    if ($exitCode -ne 0 -or $rows.Count -eq 0) {
+        $errorText = if ($errorText) { $errorText } else { "llama-bench exited with code $exitCode" }
+        if (Test-LlamaCppFailureMessage -Text ($stderr + "`n" + $stdout)) { $oom = $true }
+    }
+
+    $startupOk = ($exitCode -eq 0 -and $rows.Count -gt 0)
+
+    if ($startupOk -and -not $oom) {
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+    }
+
+    return @{
+        ts         = (Get-Date).ToString('o')
+        phase      = $Phase
+        overrides  = $Overrides
+        args       = $benchArgs
+        oom        = $oom
+        startup_ok = $startupOk
+        runs       = $rows.Count
+        pp_tps     = [math]::Round((Get-LlamaCppMedian -Values $ppValues), 2)
+        tg_tps     = [math]::Round((Get-LlamaCppMedian -Values $tgValues), 2)
+        variance   = 0.0
+        port       = $null
         error      = $errorText
         log_path   = if ($startupOk -and -not $oom) { $null } else { $stderrPath }
     }
@@ -389,22 +833,36 @@ function Invoke-LlamaCppTunerTrial {
         [Parameter(Mandatory = $true)][string]$Phase,
         [Parameter(Mandatory = $true)][int]$Index,
         [Parameter(Mandatory = $true)][int]$Runs,
+        [ValidateSet('server','bench')][string]$Driver = 'server',
         [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen'
     )
 
-    $trial = Invoke-LlamaCppTrialServer `
-        -Def $Def `
-        -ContextKey $ContextKey `
-        -Mode $Mode `
-        -ModelArgPath $ModelArgPath `
-        -Overrides $Overrides `
-        -Phase $Phase `
-        -Runs $Runs
+    if ($Driver -eq 'bench') {
+        $trial = Invoke-LlamaCppTrialBench `
+            -Def $Def `
+            -ContextKey $ContextKey `
+            -Mode $Mode `
+            -ModelArgPath $ModelArgPath `
+            -Overrides $Overrides `
+            -Phase $Phase `
+            -Runs $Runs
+    } else {
+        $trial = Invoke-LlamaCppTrialServer `
+            -Def $Def `
+            -ContextKey $ContextKey `
+            -Mode $Mode `
+            -ModelArgPath $ModelArgPath `
+            -Overrides $Overrides `
+            -Phase $Phase `
+            -Runs $Runs
+    }
 
     $score = Get-LlamaCppTrialScore -Trial $trial -Optimize $Optimize
     $trial.score = [math]::Round([double]$score, 2)
     $trial.score_unit = "${Optimize}_tps_median"
     $trial.tuner_version = $script:LlamaCppTunerVersion
+    $trial.driver = $Driver
+    $script:LlamaCppTrialDriverByPhase[$Phase] = $Driver
 
     Append-LlamaCppTunerHistory -Key $Key -Trial $trial
     Show-LlamaCppTrialRow -Index $Index -Trial $trial -Score $score
@@ -444,6 +902,7 @@ function Save-LlamaCppBestConfig {
         [Parameter(Mandatory = $true)][string]$Mode,
         [Parameter(Mandatory = $true)][string]$Quant,
         [Parameter(Mandatory = $true)][int]$VramGB,
+        [ValidateSet('short','long')][string]$PromptLength = 'short',
         [Parameter(Mandatory = $true)][string[]]$BestArgs,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$BestOverrides,
         [Parameter(Mandatory = $true)][double]$Score,
@@ -467,10 +926,12 @@ function Save-LlamaCppBestConfig {
     }
 
     $entries = @($existing.entries | Where-Object {
+        $entryPromptLength = if ($_.prompt_length) { [string]$_.prompt_length } else { 'short' }
         $_.quant -ne $Quant -or
         $_.contextKey -ne $ContextKey -or
         $_.mode -ne $Mode -or
-        [int]$_.vramGB -ne $VramGB
+        [int]$_.vramGB -ne $VramGB -or
+        $entryPromptLength -ne $PromptLength
     })
 
     $newEntry = [ordered]@{
@@ -478,6 +939,7 @@ function Save-LlamaCppBestConfig {
         contextKey    = $ContextKey
         mode          = $Mode
         vramGB        = $VramGB
+        prompt_length = $PromptLength
         score         = [math]::Round($Score, 2)
         scoreUnit     = $ScoreUnit
         args          = @($BestArgs)
@@ -485,6 +947,8 @@ function Save-LlamaCppBestConfig {
         measured_at   = (Get-Date).ToString('o')
         tuner_version = $script:LlamaCppTunerVersion
         trial_count   = $TrialCount
+        gpu_names     = @(Get-LlamaCppGpuNames)
+        llamacpp_build = (Get-LlamaCppBuildStamp -Mode $Mode)
     }
 
     $entries += $newEntry
@@ -509,6 +973,7 @@ function Get-BestLlamaCppConfig {
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Mode,
+        [ValidateSet('short','long')][string]$PromptLength = 'short',
         [string]$Quant,
         [int]$VramGB
     )
@@ -535,6 +1000,8 @@ function Get-BestLlamaCppConfig {
     foreach ($entry in $data.entries) {
         if ($entry.contextKey -ne $ContextKey) { continue }
         if ($entry.mode       -ne $Mode)       { continue }
+        $entryPromptLength = if ($entry.prompt_length) { [string]$entry.prompt_length } else { 'short' }
+        if ($entryPromptLength -ne $PromptLength) { continue }
         if ($Quant -and $entry.quant -ne $Quant) { continue }
         $delta = [Math]::Abs([int]$entry.vramGB - [int]$VramGB)
         if ($delta -gt 1) { continue }
@@ -543,6 +1010,57 @@ function Get-BestLlamaCppConfig {
     }
 
     return $null
+}
+
+function Get-LlamaCppBestConfigCandidates {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [ValidateSet('short','long')][string]$PromptLength = 'short',
+        [string]$Quant
+    )
+
+    $path = Get-LlamaCppTunerBestFile -Key $Key
+    if (-not (Test-Path $path)) { return @() }
+
+    try { $data = Get-Content -Raw -Path $path | ConvertFrom-Json }
+    catch { return @() }
+
+    if (-not $data -or -not $data.entries) { return @() }
+    return @($data.entries | Where-Object {
+        $_.contextKey -eq $ContextKey -and
+        $_.mode -eq $Mode -and
+        ($(if ($_.prompt_length) { [string]$_.prompt_length } else { 'short' }) -eq $PromptLength) -and
+        ([string]::IsNullOrWhiteSpace($Quant) -or $_.quant -eq $Quant)
+    })
+}
+
+function Test-LlamaCppBestConfigStale {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Entry,
+        [ValidateSet('native','turboquant')][string]$Mode = 'native'
+    )
+
+    $reasons = @()
+
+    $savedGpus = @($Entry.gpu_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    $currentGpus = @(Get-LlamaCppGpuNames)
+    if ($savedGpus.Count -gt 0 -and $currentGpus.Count -gt 0) {
+        if (($savedGpus -join '|') -ne ($currentGpus -join '|')) {
+            $reasons += "GPU changed: saved='$($savedGpus -join ', ')' current='$($currentGpus -join ', ')'"
+        }
+    }
+
+    $savedBuild = [string]$Entry.llamacpp_build
+    $currentBuild = Get-LlamaCppBuildStamp -Mode $Mode
+    if (-not [string]::IsNullOrWhiteSpace($savedBuild) -and -not [string]::IsNullOrWhiteSpace($currentBuild) -and $savedBuild -ne $currentBuild) {
+        $reasons += "llama.cpp build changed"
+    }
+
+    return @($reasons)
 }
 
 function Save-BestLlamaCppConfig {
@@ -554,6 +1072,7 @@ function Save-BestLlamaCppConfig {
         [Parameter(Mandatory = $true)][string]$Mode,
         [Parameter(Mandatory = $true)][string]$Quant,
         [Parameter(Mandatory = $true)][int]$VramGB,
+        [ValidateSet('short','long')][string]$PromptLength = 'short',
         [Parameter(Mandatory = $true)][string[]]$BestArgs,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$BestOverrides,
         [Parameter(Mandatory = $true)][double]$Score,
@@ -575,8 +1094,25 @@ function Find-BestLlamaCppConfig {
         [int]$Runs = 1,
         [switch]$Quick,
         [switch]$Aggressive,
+        [switch]$AggressiveKv,
+        [switch]$AllowKvQualityRegression,
+        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
         [switch]$NoSave
     )
+
+    if ($PromptLengths.Count -gt 1) {
+        $results = @()
+        foreach ($profile in $PromptLengths) {
+            $childParams = @{}
+            foreach ($k in $PSBoundParameters.Keys) { $childParams[$k] = $PSBoundParameters[$k] }
+            $childParams['PromptLengths'] = @($profile)
+            $results += (Find-BestLlamaCppConfig @childParams)
+        }
+        return @($results)
+    }
+
+    $promptProfile = if ($PromptLengths -and $PromptLengths.Count -gt 0) { [string]$PromptLengths[0] } else { 'short' }
+    Set-LlamaCppTunerPromptProfile -Profile $promptProfile
 
     $def = Get-ModelDef -Key $Key
     if ($def.SourceType -ne 'gguf') {
@@ -605,9 +1141,17 @@ function Find-BestLlamaCppConfig {
     Stop-OllamaModels
     Stop-OllamaApp
     Stop-LlamaServer -Quiet
+    $script:LlamaCppTrialDriverByPhase = @{}
 
     # Resolve GGUF path once (downloads on demand). Used for every trial.
     $ggufPath = Get-ModelGgufPath -Key $Key -Def $def -Backend llamacpp
+
+    $benchAvailable = $false
+    if ($Mode -eq 'native') {
+        try { $benchPath = Ensure-LlamaBenchExe -NonInteractive } catch { $benchPath = $null }
+        $benchAvailable = -not [string]::IsNullOrWhiteSpace($benchPath)
+    }
+    $script:LlamaCppCoarseMode = if ($benchAvailable) { 'bench' } else { 'server' }
 
     $space = Resolve-LlamaCppTunerSearchSpace -Def $def
     $vramGB = Get-LocalLLMVRAMGB
@@ -619,8 +1163,8 @@ function Find-BestLlamaCppConfig {
 
     $startedAt = Get-Date
     Write-Host ""
-    Write-Host "=== llama.cpp tuner: $Key  (ctx=$ContextKey, mode=$Mode, quant=$quant, vram=${vramGB}GB) ===" -ForegroundColor Cyan
-    Write-Host "  budget=$Budget  optimize=$Optimize  runs/trial=$Runs  isMoE=$($space.IsMoE)" -ForegroundColor DarkGray
+    Write-Host "=== llama.cpp tuner: $Key  (ctx=$ContextKey, mode=$Mode, quant=$quant, vram=${vramGB}GB, prompt=$promptProfile) ===" -ForegroundColor Cyan
+    Write-Host "  budget=$Budget  optimize=$Optimize  runs/trial=$Runs  isMoE=$($space.IsMoE)  coarse=$script:LlamaCppCoarseMode" -ForegroundColor DarkGray
     if ($space.SkipPhases.Count -gt 0) {
         Write-Host "  catalog skip-phases: $($space.SkipPhases -join ', ')" -ForegroundColor DarkGray
     }
@@ -632,6 +1176,12 @@ function Find-BestLlamaCppConfig {
         return $true
     }
 
+    function Get-PhaseDriver($name) {
+        if (-not $benchAvailable) { return 'server' }
+        if ($name -in @('moe','ngl','batching','flash','mmap','threads')) { return 'bench' }
+        return 'server'
+    }
+
     # ----- Phase 1: baseline -----
     $baselineOverrides = [ordered]@{
         KvK = $kv.K
@@ -641,7 +1191,7 @@ function Find-BestLlamaCppConfig {
     $trialIndex++
     $baselineTrial = Invoke-LlamaCppTunerTrial `
         -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
-        -Overrides $baselineOverrides -Phase 'baseline' -Index $trialIndex -Runs $Runs -Optimize $Optimize
+        -Overrides $baselineOverrides -Phase 'baseline' -Index $trialIndex -Runs $Runs -Driver server -Optimize $Optimize
     $history.Add($baselineTrial) | Out-Null
 
     if (-not $baselineTrial.startup_ok -or $baselineTrial.oom) {
@@ -688,7 +1238,7 @@ function Find-BestLlamaCppConfig {
                 $trialIndex++
                 $t = Invoke-LlamaCppTunerTrial `
                     -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
-                    -Overrides $cand -Phase 'moe' -Index $trialIndex -Runs $Runs -Optimize $Optimize
+                    -Overrides $cand -Phase 'moe' -Index $trialIndex -Runs $Runs -Driver (Get-PhaseDriver 'moe') -Optimize $Optimize
                 $history.Add($t) | Out-Null
 
                 if ($t.startup_ok -and -not $t.oom) {
@@ -722,7 +1272,7 @@ function Find-BestLlamaCppConfig {
                     $trialIndex++
                     $t = Invoke-LlamaCppTunerTrial `
                         -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
-                        -Overrides $cand -Phase 'ngl' -Index $trialIndex -Runs $Runs -Optimize $Optimize
+                        -Overrides $cand -Phase 'ngl' -Index $trialIndex -Runs $Runs -Driver (Get-PhaseDriver 'ngl') -Optimize $Optimize
                     $history.Add($t) | Out-Null
                     if ($t.startup_ok -and -not $t.oom) {
                         if (-not $best -or $t.score -gt $best.score) {
@@ -766,12 +1316,200 @@ function Find-BestLlamaCppConfig {
             $trialIndex++
             $t = Invoke-LlamaCppTunerTrial `
                 -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
-                -Overrides $cand -Phase 'batching' -Index $trialIndex -Runs $Runs -Optimize $Optimize
+                -Overrides $cand -Phase 'batching' -Index $trialIndex -Runs $Runs -Driver (Get-PhaseDriver 'batching') -Optimize $Optimize
             $history.Add($t) | Out-Null
 
             if ($t.startup_ok -and -not $t.oom -and $t.score -gt $best.score) {
                 $best = @{ overrides = $cand; trial = $t; score = [double]$t.score }
             }
+        }
+    }
+
+    # ----- Phase 4: flash-attn on/off -----
+    if ($trialIndex -lt $Budget -and (Should-RunPhase 'flash')) {
+        foreach ($flashValue in @($true, $false)) {
+            if ($trialIndex -ge $Budget) { break }
+
+            $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{ FlashAttn = $flashValue }
+            if (Test-LlamaCppMonotonicityOom -Candidate $cand -History $history) {
+                Write-Host "  -- skip flash=$flashValue (pruned)" -ForegroundColor DarkGray
+                continue
+            }
+
+            $trialIndex++
+            $t = Invoke-LlamaCppTunerTrial `
+                -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
+                -Overrides $cand -Phase 'flash' -Index $trialIndex -Runs $Runs -Driver (Get-PhaseDriver 'flash') -Optimize $Optimize
+            $history.Add($t) | Out-Null
+
+            if ($t.startup_ok -and -not $t.oom -and $t.score -gt $best.score) {
+                $best = @{ overrides = $cand; trial = $t; score = [double]$t.score }
+            }
+        }
+    }
+
+    # ----- Phase 5: mlock / no-mmap -----
+    if ($trialIndex -lt $Budget -and (Should-RunPhase 'mmap')) {
+        $combos = @(
+            @{ Mlock = $true;  NoMmap = $true  },
+            @{ Mlock = $false; NoMmap = $false }
+        )
+        if ($Aggressive) {
+            $combos += @(
+                @{ Mlock = $true;  NoMmap = $false },
+                @{ Mlock = $false; NoMmap = $true  }
+            )
+        }
+
+        foreach ($combo in $combos) {
+            if ($trialIndex -ge $Budget) { break }
+
+            $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay $combo
+            if (Test-LlamaCppMonotonicityOom -Candidate $cand -History $history) {
+                Write-Host "  -- skip mlock=$($combo.Mlock) no-mmap=$($combo.NoMmap) (pruned)" -ForegroundColor DarkGray
+                continue
+            }
+
+            $trialIndex++
+            $t = Invoke-LlamaCppTunerTrial `
+                -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
+                -Overrides $cand -Phase 'mmap' -Index $trialIndex -Runs $Runs -Driver (Get-PhaseDriver 'mmap') -Optimize $Optimize
+            $history.Add($t) | Out-Null
+
+            if ($t.startup_ok -and -not $t.oom -and $t.score -gt $best.score) {
+                $best = @{ overrides = $cand; trial = $t; score = [double]$t.score }
+            }
+        }
+    }
+
+    # ----- Phase 6: threads (CPU-offload models only) -----
+    if ($trialIndex -lt $Budget -and (Should-RunPhase 'threads')) {
+        $currentNCpuMoe = if ($best.overrides.Contains('NCpuMoe')) { [int]$best.overrides.NCpuMoe } elseif ($space.IsMoE) { [int]$space.BaselineNCpuMoe } else { 0 }
+        $currentNgl = if ($best.overrides.Contains('NGpuLayers')) { [int]$best.overrides.NGpuLayers } else { [int]$space.BaselineNgl }
+        if ($currentNgl -le 0) { $currentNgl = 999 }
+        $shouldTuneThreads = ($currentNCpuMoe -gt 0) -or ((-not $space.IsMoE) -and $currentNgl -lt 999)
+
+        if ($shouldTuneThreads) {
+            try {
+                $logicalCores = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+            }
+            catch {
+                $logicalCores = [Environment]::ProcessorCount
+            }
+
+            $threadCandidates = @(
+                [int][Math]::Max(1, [Math]::Floor($logicalCores / 2)),
+                [int][Math]::Max(1, [Math]::Floor($logicalCores * 3 / 4)),
+                [int][Math]::Max(1, $logicalCores)
+            ) | Select-Object -Unique
+
+            $remaining = [Math]::Max(0, $Budget - $trialIndex)
+            if ($threadCandidates.Count -gt $remaining -and $threadCandidates.Count -eq 3) {
+                $threadCandidates = @($threadCandidates[0], $threadCandidates[2])
+            }
+
+            foreach ($threads in $threadCandidates) {
+                if ($trialIndex -ge $Budget) { break }
+
+                $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{ Threads = $threads; ThreadsBatch = $threads }
+                if (Test-LlamaCppMonotonicityOom -Candidate $cand -History $history) {
+                    Write-Host "  -- skip threads=$threads (pruned)" -ForegroundColor DarkGray
+                    continue
+                }
+
+                $trialIndex++
+                $t = Invoke-LlamaCppTunerTrial `
+                    -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
+                    -Overrides $cand -Phase 'threads' -Index $trialIndex -Runs $Runs -Driver (Get-PhaseDriver 'threads') -Optimize $Optimize
+                $history.Add($t) | Out-Null
+
+                if ($t.startup_ok -and -not $t.oom -and $t.score -gt $best.score) {
+                    $best = @{ overrides = $cand; trial = $t; score = [double]$t.score }
+                }
+            }
+        } else {
+            Write-Host "  -- skip threads (no CPU offload in winning config)" -ForegroundColor DarkGray
+        }
+    }
+
+    # ----- Phase 7: KV cache types -----
+    if ($trialIndex -lt $Budget -and (Should-RunPhase 'kv') -and $AllowedKvTypes.Count -gt 1) {
+        $preKvBest = $best
+        $kvPairs = @()
+        foreach ($t in $AllowedKvTypes) {
+            Test-LlamaCppKvType -Type $t -Mode $Mode
+            $kvPairs += @{ K = $t; V = $t }
+        }
+        if ($AggressiveKv) {
+            foreach ($kType in $AllowedKvTypes) {
+                foreach ($vType in $AllowedKvTypes) {
+                    if ($kType -eq $vType) { continue }
+                    Test-LlamaCppKvType -Type $kType -Mode $Mode
+                    Test-LlamaCppKvType -Type $vType -Mode $Mode
+                    $kvPairs += @{ K = $kType; V = $vType }
+                }
+            }
+        }
+
+        foreach ($pair in $kvPairs) {
+            if ($trialIndex -ge $Budget) { break }
+
+            $cand = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{ KvK = $pair.K; KvV = $pair.V }
+            if (Test-LlamaCppMonotonicityOom -Candidate $cand -History $history) {
+                Write-Host "  -- skip kv K=$($pair.K) V=$($pair.V) (pruned)" -ForegroundColor DarkGray
+                continue
+            }
+
+            $trialIndex++
+            $t = Invoke-LlamaCppTunerTrial `
+                -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
+                -Overrides $cand -Phase 'kv' -Index $trialIndex -Runs $Runs -Driver server -Optimize $Optimize
+            $history.Add($t) | Out-Null
+
+            if ($t.startup_ok -and -not $t.oom -and $t.score -gt $best.score) {
+                $best = @{ overrides = $cand; trial = $t; score = [double]$t.score }
+            }
+        }
+
+        $bestKvK = if ($best.overrides.Contains('KvK')) { [string]$best.overrides.KvK } else { [string]$kv.K }
+        $bestKvV = if ($best.overrides.Contains('KvV')) { [string]$best.overrides.KvV } else { [string]$kv.V }
+        $kvChanged = ($bestKvK -ne [string]$kv.K) -or ($bestKvV -ne [string]$kv.V)
+        if ($kvChanged -and -not $AllowKvQualityRegression) {
+            Write-Host "  -- checking KV quality with llama-perplexity..." -ForegroundColor DarkGray
+            $baselineKv = Join-LlamaCppOverrides -Base $best.overrides -Overlay @{ KvK = $kv.K; KvV = $kv.V }
+            $baselinePpl = Invoke-LlamaCppPerplexity -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath -Overrides $baselineKv
+            $candidatePpl = Invoke-LlamaCppPerplexity -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath -Overrides $best.overrides
+
+            if ($null -ne $baselinePpl -and $null -ne $candidatePpl -and $baselinePpl -gt 0) {
+                $delta = ([double]$candidatePpl - [double]$baselinePpl) / [double]$baselinePpl
+                Write-Host ("  -- KV perplexity baseline={0:N4} candidate={1:N4} delta={2:P2}" -f $baselinePpl, $candidatePpl, $delta) -ForegroundColor DarkGray
+                if ($delta -gt 0.01) {
+                    Write-Warning ("KV cache variation increased perplexity by {0:P2}; keeping baseline KV pair. Re-run with -AllowKvQualityRegression to accept the faster KV setting." -f $delta)
+                    $best = $preKvBest
+                }
+            } else {
+                Write-Warning "KV quality check unavailable; llama-perplexity did not return comparable perplexity values."
+            }
+        }
+    }
+
+    # ----- Phase 8: final verification -----
+    if ($script:LlamaCppCoarseMode -ne 'server') {
+        $trialIndex++
+        $verified = Invoke-LlamaCppTunerTrial `
+            -Key $Key -Def $def -ContextKey $ContextKey -Mode $Mode -ModelArgPath $ggufPath `
+            -Overrides $best.overrides -Phase 'verify' -Index $trialIndex -Runs $Runs -Driver server -Optimize $Optimize
+
+        if ($verified.startup_ok -and -not $verified.oom) {
+            $verifiedScore = [double]$verified.score
+            if ($best.score -gt 0 -and $verifiedScore -lt (0.9 * [double]$best.score)) {
+                $pct = [math]::Round(100.0 * $verifiedScore / [double]$best.score, 1)
+                Write-Warning "Verification regressed ($pct%) vs coarse sweep - recording verified score."
+            }
+            $best.trial = $verified
+            $best.score = $verifiedScore
+        } else {
+            Write-Warning "Final verification failed; keeping coarse winner but review $($verified.log_path)."
         }
     }
 
@@ -789,6 +1527,7 @@ function Find-BestLlamaCppConfig {
     if (-not $NoSave) {
         $savedPath = Save-LlamaCppBestConfig `
             -Key $Key -ContextKey $ContextKey -Mode $Mode -Quant $quant -VramGB $vramGB `
+            -PromptLength $promptProfile `
             -BestArgs $best.trial.args -BestOverrides $best.overrides `
             -Score $best.score -ScoreUnit "${Optimize}_tps_median" -TrialCount $trialIndex
         Write-Host "Saved best -> $savedPath" -ForegroundColor DarkGray
@@ -806,6 +1545,7 @@ function Find-BestLlamaCppConfig {
         ContextKey   = $ContextKey
         Mode         = $Mode
         Quant        = $quant
+        PromptLength = $promptProfile
     }
 }
 
@@ -866,6 +1606,9 @@ function findbest {
         [int]$Runs = 1,
         [switch]$Quick,
         [switch]$Aggressive,
+        [switch]$AggressiveKv,
+        [switch]$AllowKvQualityRegression,
+        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
         [switch]$NoSave
     )
     Find-BestLlamaCppConfig @PSBoundParameters
@@ -883,6 +1626,9 @@ function tunellm {
         [int]$Runs = 1,
         [switch]$Quick,
         [switch]$Aggressive,
+        [switch]$AggressiveKv,
+        [switch]$AllowKvQualityRegression,
+        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
         [switch]$NoSave
     )
     Find-BestLlamaCppConfig @PSBoundParameters

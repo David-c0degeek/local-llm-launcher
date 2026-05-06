@@ -28,6 +28,34 @@ function Find-LlamaServerExe {
     return $null
 }
 
+function Find-LlamaBenchExe {
+    $defaultPath = Join-Path (Get-LlamaCppInstallRoot) "llama-bench.exe"
+    if (Test-Path $defaultPath) {
+        return $defaultPath
+    }
+
+    $cmd = Get-Command llama-bench.exe -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+
+    return $null
+}
+
+function Find-LlamaPerplexityExe {
+    $defaultPath = Join-Path (Get-LlamaCppInstallRoot) "llama-perplexity.exe"
+    if (Test-Path $defaultPath) {
+        return $defaultPath
+    }
+
+    $cmd = Get-Command llama-perplexity.exe -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+
+    return $null
+}
+
 function Get-LlamaCppGpuVariant {
     # Returns 'cuda' | 'vulkan' | 'cpu' based on configured override or
     # auto-detection. CUDA is preferred when nvidia-smi works; vulkan covers
@@ -143,12 +171,12 @@ function Install-LlamaServerNative {
     Expand-Archive -LiteralPath $tmpZip -DestinationPath $installRoot -Force
     Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
 
-    # Some archives nest binaries under a folder; flatten if needed.
+    # Some archives nest binaries under a folder; flatten executable tools if needed.
     if (-not (Test-Path $serverPath)) {
         $found = Get-ChildItem -Path $installRoot -Filter "llama-server.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($found) {
             $sourceDir = Split-Path -Parent $found.FullName
-            Get-ChildItem -Path $sourceDir -File | ForEach-Object {
+            Get-ChildItem -Path $sourceDir -Filter "*.exe" -File | ForEach-Object {
                 Move-Item -LiteralPath $_.FullName -Destination $installRoot -Force
             }
         }
@@ -156,6 +184,12 @@ function Install-LlamaServerNative {
 
     if (-not (Test-Path $serverPath)) {
         throw "Extraction completed but llama-server.exe was not found under $installRoot."
+    }
+    if (-not (Test-Path (Join-Path $installRoot "llama-bench.exe"))) {
+        Write-Warning "llama-bench.exe was not found in the installed llama.cpp archive; tuner will fall back to server probes."
+    }
+    if (-not (Test-Path (Join-Path $installRoot "llama-perplexity.exe"))) {
+        Write-Warning "llama-perplexity.exe was not found in the installed llama.cpp archive; KV quality checks will be unavailable."
     }
 
     "$($release.tag_name)`n$variant" | Set-Content -LiteralPath (Join-Path $installRoot ".build-stamp") -Encoding utf8
@@ -206,6 +240,58 @@ function Ensure-LlamaServerNative {
     }
 
     return Install-LlamaServerNative
+}
+
+function Ensure-LlamaBenchExe {
+    param([switch]$NonInteractive)
+
+    $existing = Find-LlamaBenchExe
+    if ($existing) { return $existing }
+
+    if ($NonInteractive) {
+        Install-LlamaServerNative -Force | Out-Null
+        $installed = Find-LlamaBenchExe
+        if ($installed) { return $installed }
+        return $null
+    }
+
+    Write-Host ""
+    Write-Host "llama-bench is not installed." -ForegroundColor Yellow
+    Write-Host "  It ships in the same upstream llama.cpp archive as llama-server." -ForegroundColor DarkGray
+    $answer = (Read-Host "Download/reinstall llama.cpp tools now? [Y/n]").Trim().ToLowerInvariant()
+
+    if ($answer -in @("n", "no")) {
+        return $null
+    }
+
+    Install-LlamaServerNative -Force | Out-Null
+    return (Find-LlamaBenchExe)
+}
+
+function Ensure-LlamaPerplexityExe {
+    param([switch]$NonInteractive)
+
+    $existing = Find-LlamaPerplexityExe
+    if ($existing) { return $existing }
+
+    if ($NonInteractive) {
+        Install-LlamaServerNative -Force | Out-Null
+        $installed = Find-LlamaPerplexityExe
+        if ($installed) { return $installed }
+        return $null
+    }
+
+    Write-Host ""
+    Write-Host "llama-perplexity is not installed." -ForegroundColor Yellow
+    Write-Host "  It ships in the same upstream llama.cpp archive as llama-server." -ForegroundColor DarkGray
+    $answer = (Read-Host "Download/reinstall llama.cpp tools now? [Y/n]").Trim().ToLowerInvariant()
+
+    if ($answer -in @("n", "no")) {
+        return $null
+    }
+
+    Install-LlamaServerNative -Force | Out-Null
+    return (Find-LlamaPerplexityExe)
 }
 
 function Get-LlamaCppTurboquantInstallRoot {
