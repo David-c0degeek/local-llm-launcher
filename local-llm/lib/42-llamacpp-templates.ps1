@@ -26,9 +26,9 @@ function Resolve-LlamaCppChatTemplate {
 
     switch ($Parser) {
         'none'           { return @() }
-        'qwen3coder'     { return @('--chat-template', 'chatml') }
-        'qwen36'         { return @('--chat-template', 'chatml') }
-        'qwen36-think'   { return @('--chat-template', 'chatml') }
+        'qwen3coder'     { return @('--jinja') }
+        'qwen36'         { return @('--jinja') }
+        'qwen36-think'   { return @('--jinja') }
         default          { return @() }
     }
 }
