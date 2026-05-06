@@ -381,6 +381,8 @@ function Start-ClaudeWithLlamaCppModel {
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$Strict,
         [switch]$AutoBest,
+        [switch]$AutoBestStrict,
+        [ValidateSet('short','long')][string]$AutoBestProfile = 'short',
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs
     )
@@ -440,9 +442,18 @@ function Start-ClaudeWithLlamaCppModel {
     # because they were set before this block — we only fill in keys that
     # haven't already been bound.
     if ($AutoBest) {
-        $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode
+        $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $AutoBestProfile
         if ($bestEntry -and $bestEntry.overrides) {
             Write-Host "AutoBest: loaded saved tuner config (score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
+            $staleReasons = @(Test-LlamaCppBestConfigStale -Entry $bestEntry -Mode $Mode)
+            if ($staleReasons.Count -gt 0) {
+                $msg = "AutoBest: hardware/build changed since last tune - saved config may be stale. Re-run: findbest $Key -ContextKey $ContextKey -Mode $Mode"
+                if ($AutoBestStrict) { throw $msg }
+                Write-Warning $msg
+                foreach ($reason in $staleReasons) {
+                    Write-Warning "AutoBest: $reason"
+                }
+            }
             $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode')
             foreach ($k in $tunable) {
                 if ($buildParams.ContainsKey($k)) { continue }
@@ -458,7 +469,16 @@ function Start-ClaudeWithLlamaCppModel {
         } elseif ($bestEntry) {
             Write-Warning "AutoBest: matched saved entry has no 'overrides' field (older tuner version?). Skipping."
         } else {
-            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode vram=$(Get-LocalLLMVRAMGB)GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode"
+            $currentVram = Get-LocalLLMVRAMGB
+            $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
+            $candidates = @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $AutoBestProfile -Quant $quant)
+            foreach ($candidate in $candidates) {
+                if ($candidate.vramGB -and [Math]::Abs([int]$candidate.vramGB - [int]$currentVram) -gt 1) {
+                    Write-Warning "AutoBest: saved config VRAM was $($candidate.vramGB)GB, current detected VRAM is ${currentVram}GB."
+                    break
+                }
+            }
+            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode profile=$AutoBestProfile vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $AutoBestProfile"
         }
     }
 

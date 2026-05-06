@@ -507,11 +507,22 @@ findbest q36plus -ContextKey 256k -Optimize prompt
 # Allow KV cache variation (default = the model's current single type)
 findbest q36plus -ContextKey 256k -AllowedKvTypes q8_0,f16
 
+# Try mismatched K/V pairs too, and allow an explicit quality trade if wanted
+findbest q36plus -ContextKey 256k -AllowedKvTypes q8_0,q4_0 -AggressiveKv
+
+# Power-user: tune separate short- and long-prefill profiles
+findbest q36plus -ContextKey 256k -PromptLengths short,long
+
 # Inspect every trial run for a model
 Show-LlamaCppTunerHistory -Key q36plus -Last 50
 ```
 
-**What gets searched (T1 phases):**
+When `llama-bench.exe` is available in mainline mode, the tuner automatically
+uses it for the coarse performance-only phases and verifies the winner through
+`llama-server` before saving. Turboquant mode and KV-cache probes stay on the
+server path for fidelity.
+
+**What gets searched:**
 
 1. **baseline** — catalog defaults, one probe.
 2. **moe_or_ngl** — for MoE models, sweep `--n-cpu-moe` to find the smallest
@@ -519,10 +530,26 @@ Show-LlamaCppTunerHistory -Key q36plus -Last 50
    with `-ngl` already at 999, this phase is a no-op unless baseline OOMed.
 3. **batching** — joint sweep of `(--ubatch-size, --batch-size)` over a small
    2-D grid.
+4. **flash** — compares flash-attention on/off.
+5. **mmap** — compares `--mlock --no-mmap` against the default mapping mode
+   (`-Aggressive` tries the cross-combinations too).
+6. **threads** — sweeps CPU thread counts when the winning config keeps MoE
+   experts or dense layers on CPU.
+7. **kv** — only runs when `-AllowedKvTypes` contains more than one type.
+   KV variation can change generations, so widened searches are an explicit
+   opt-in; the tuner runs a small perplexity sanity check and refuses a >1%
+   regression unless `-AllowKvQualityRegression` is passed.
+8. **verify** — re-runs the final winner through `llama-server` when a coarse
+   bench phase was used.
 
-OOM is detected from llama-server stderr; OOM-monotonicity prunes branches
-that are guaranteed to fail. Phases 4–7 (flash-attn / mlock / threads / KV)
-land in T2.
+OOM/failure is detected from process output; OOM-monotonicity prunes branches
+that are guaranteed to fail. Saved entries include the GPU name and llama.cpp
+build stamp, so `-AutoBest` can warn when a re-tune is advisable after a
+hardware or llama.cpp upgrade. Tuner version changes require a re-tune.
+
+`-PromptLengths short,long` stores separate profile entries. `-AutoBest`
+defaults to the short profile; use `-AutoBestProfile long` to replay the
+long-prefill winner.
 
 **Replaying the saved best:**
 
@@ -534,6 +561,10 @@ The launcher matches the saved entry on `(key, contextKey, mode, vramGB ± 1)`
 and a tuner-version stamp; on a miss it warns and falls through to defaults.
 Caller-supplied `-KvCacheK` / `-KvCacheV` / `-ExtraArgs` always win over the
 saved values.
+
+In the wizard, choose the llama.cpp backend and then **Find best settings** to
+run the same tuner interactively, with prompts to widen KV variation, save the
+winner, and launch immediately with `-AutoBest`.
 
 ---
 

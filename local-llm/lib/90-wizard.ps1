@@ -194,6 +194,7 @@ function Select-LLMAction {
         @(
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
             [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
             [pscustomobject]@{ Key = "setup"; Label = "Download GGUF only"; Description = "Resolve and cache the GGUF without launching" }
         )
     } else {
@@ -354,6 +355,80 @@ function Read-LLMStrictToggle {
     }
 }
 
+function Read-LLMYesNo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Prompt,
+        [bool]$DefaultYes = $false
+    )
+
+    $suffix = if ($DefaultYes) { "[Y/n]" } else { "[y/N]" }
+    while ($true) {
+        $answer = (Read-Host "$Prompt $suffix").Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($answer)) { return $DefaultYes }
+        if ($answer -in @("y", "yes")) { return $true }
+        if ($answer -in @("n", "no"))  { return $false }
+        Write-Host "Answer y or n." -ForegroundColor Red
+    }
+}
+
+function Invoke-LlamaCppTunerWizardFlow {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode,
+        [switch]$UseSpectrePrompts
+    )
+
+    $allowKv = if ($UseSpectrePrompts) {
+        Read-LLMTuneKvVariationSpectre
+    } else {
+        Write-Host ""
+        Write-Host "Widens the search to other types in your quality class." -ForegroundColor DarkGray
+        Read-LLMYesNo -Prompt "Allow KV cache variation?" -DefaultYes:$false
+    }
+
+    $allowedKvTypes = $null
+    if ($allowKv) {
+        $allowedKvTypes = if ($Mode -eq 'turboquant') {
+            @('q8_0', 'f16', 'turbo3', 'turbo4')
+        } else {
+            @('q8_0', 'f16')
+        }
+    }
+
+    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AllowedKvTypes $allowedKvTypes -NoSave
+
+    Write-Host ""
+    Write-Host "Best tuner result:" -ForegroundColor Green
+    Write-Host ("  score     : {0:N2} ({1})" -f $result.Score, $result.ScoreUnit) -ForegroundColor Green
+    Write-Host ("  overrides : {0}" -f (Format-LlamaCppOverrides -Overrides $result.Overrides)) -ForegroundColor DarkGray
+    Write-Host ""
+
+    $saveAnswer = if ($UseSpectrePrompts) {
+        Read-LLMYesNoSpectre -Message "Save as the default for this machine?" -DefaultYes
+    } else {
+        Read-LLMYesNo -Prompt "Save as the default for this machine?" -DefaultYes:$true
+    }
+    if ($saveAnswer) {
+        $saved = Save-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode `
+            -Quant $result.Quant -VramGB $result.VramGB `
+            -PromptLength $result.PromptLength `
+            -BestArgs $result.Args -BestOverrides $result.Overrides `
+            -Score $result.Score -ScoreUnit $result.ScoreUnit `
+            -TrialCount $result.TrialCount
+        Write-Host "Saved best -> $saved" -ForegroundColor DarkGray
+    }
+
+    $launchAnswer = if ($UseSpectrePrompts) {
+        Read-LLMYesNoSpectre -Message "Launch immediately with the new config?" -DefaultYes
+    } else {
+        Read-LLMYesNo -Prompt "Launch immediately with the new config?" -DefaultYes:$true
+    }
+    if ($launchAnswer) {
+        Start-ClaudeWithLlamaCppModel -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AutoBest
+    }
+}
+
 function Invoke-LLMSelection {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -364,7 +439,8 @@ function Invoke-LLMSelection {
         [string]$KvCacheK,
         [string]$KvCacheV,
         [switch]$UseQ8,
-        [switch]$Strict
+        [switch]$Strict,
+        [switch]$UseSpectrePrompts
     )
 
     if ($Backend -eq 'llamacpp') {
@@ -389,6 +465,10 @@ function Invoke-LLMSelection {
                 # Strict has no effect on the GGUF path — same file regardless.
                 $path = Get-ModelGgufPath -Key $ModelKey -Def $def -Backend llamacpp
                 Write-Host "GGUF cached at: $path" -ForegroundColor Green
+            }
+
+            "findbest" {
+                Invoke-LlamaCppTunerWizardFlow -ModelKey $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode -UseSpectrePrompts:$UseSpectrePrompts
             }
 
             default {
@@ -677,6 +757,7 @@ function Select-LLMActionSpectre {
         [ordered]@{
             "Claude Code  -  Local model behind Claude Code" = 'claude'
             "Unshackled   -  Local agent via Unshackled"     = 'fc'
+            "Find best settings - Auto-tune for this machine" = 'findbest'
             "Setup only   -  Download GGUF without launching" = 'setup'
             "[[Back]]"                                       = '__back__'
         }
@@ -786,6 +867,39 @@ function Read-LLMStrictToggleSpectre {
     $chosen = Read-SpectreSelection -Message "Use strict mode? (skips context selection when on)" -Choices @($choices.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
     if ($chosen -eq '[[Back]]') { return $null }
+    return [bool]$choices[$chosen]
+}
+
+function Read-LLMYesNoSpectre {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [switch]$DefaultYes
+    )
+
+    $choices = if ($DefaultYes) {
+        [ordered]@{
+            'Yes' = $true
+            'No'  = $false
+        }
+    } else {
+        [ordered]@{
+            'No'  = $false
+            'Yes' = $true
+        }
+    }
+
+    $chosen = Read-SpectreSelection -Message $Message -Choices @($choices.Keys) -PageSize 4
+    if ($null -eq $chosen) { return [bool]$DefaultYes }
+    return [bool]$choices[$chosen]
+}
+
+function Read-LLMTuneKvVariationSpectre {
+    $choices = [ordered]@{
+        'No  -  keep current KV type only'       = $false
+        'Yes -  widen within the quality class'  = $true
+    }
+    $chosen = Read-SpectreSelection -Message "Allow KV cache variation? Widens the search to other types in your quality class." -Choices @($choices.Keys) -PageSize 4
+    if ($null -eq $chosen) { return $false }
     return [bool]$choices[$chosen]
 }
 
@@ -985,7 +1099,7 @@ function Start-LLMWizardSpectre {
                 try {
                     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
                         -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseSpectrePrompts
                 }
                 catch {
                     Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend/strict=$useStrict)"
