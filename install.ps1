@@ -221,24 +221,105 @@ function Test-BenchPilotCheckout {
     param([string]$Root)
 
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
-    try {
-        return (Test-Path -LiteralPath (Join-Path $Root "src\BenchPilot.psm1") -PathType Leaf -ErrorAction SilentlyContinue)
-    }
-    catch {
-        return $false
-    }
+    if (-not (Test-InstallPathRootExists -Path $Root)) { return $false }
+    return (Test-Path (Join-Path $Root "src\BenchPilot.psm1"))
 }
 
 function Test-UnshackledCheckout {
     param([string]$Root)
 
     if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
-    try {
-        return (Test-Path -LiteralPath (Join-Path $Root "src\entrypoints\cli.tsx") -PathType Leaf -ErrorAction SilentlyContinue)
+    if (-not (Test-InstallPathRootExists -Path $Root)) { return $false }
+    return (Test-Path (Join-Path $Root "src\entrypoints\cli.tsx"))
+}
+
+function Test-InstallPathRootExists {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+
+    $qualifier = Split-Path -Path $Path -Qualifier
+    if (-not $qualifier) { return $true }
+
+    $driveName = $qualifier.TrimEnd(":")
+    return [bool](Get-PSDrive -Name $driveName -PSProvider FileSystem -ErrorAction SilentlyContinue)
+}
+
+function Get-InstallSearchRoots {
+    $roots = New-Object System.Collections.Generic.List[string]
+
+    if (-not [string]::IsNullOrWhiteSpace($HOME) -and (Test-Path -LiteralPath $HOME)) {
+        $roots.Add((Resolve-Path -LiteralPath $HOME).Path) | Out-Null
     }
-    catch {
-        return $false
+
+    foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        if ([string]::IsNullOrWhiteSpace($drive.Root) -or -not (Test-Path -LiteralPath $drive.Root)) { continue }
+
+        $root = (Resolve-Path -LiteralPath $drive.Root).Path
+        if ($roots -notcontains $root) {
+            $roots.Add($root) | Out-Null
+        }
     }
+
+    return @($roots)
+}
+
+function Find-CheckoutByMarker {
+    param(
+        [Parameter(Mandatory = $true)][string]$MarkerRelativePath,
+        [Parameter(Mandatory = $true)][scriptblock]$Validator,
+        [int]$MaxDepth = 7
+    )
+
+    $skipNames = @(
+        '$Recycle.Bin',
+        '.git',
+        '.idea',
+        'AppData',
+        'node_modules',
+        'PerfLogs',
+        'Program Files',
+        'Program Files (x86)',
+        'ProgramData',
+        'Recovery',
+        'System Volume Information',
+        'Windows'
+    )
+
+    $queue = New-Object System.Collections.Generic.Queue[object]
+    foreach ($root in (Get-InstallSearchRoots)) {
+        $queue.Enqueue([pscustomobject]@{ Path = $root; Depth = 0 })
+    }
+
+    while ($queue.Count -gt 0) {
+        $current = $queue.Dequeue()
+        $path = [string]$current.Path
+        $depth = [int]$current.Depth
+
+        $marker = Join-Path $path $MarkerRelativePath
+        if (Test-Path -LiteralPath $marker) {
+            if (& $Validator $path) {
+                return $path
+            }
+        }
+
+        if ($depth -ge $MaxDepth) { continue }
+
+        try {
+            $children = Get-ChildItem -LiteralPath $path -Directory -Force -ErrorAction Stop
+        }
+        catch {
+            continue
+        }
+
+        foreach ($child in $children) {
+            if ($child.Name -in $skipNames) { continue }
+            if (($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+            $queue.Enqueue([pscustomobject]@{ Path = $child.FullName; Depth = ($depth + 1) })
+        }
+    }
+
+    return $null
 }
 
 function Find-BenchPilotInstall {
@@ -252,11 +333,17 @@ function Find-BenchPilotInstall {
     if ($module) { return [pscustomobject]@{ Source = "module"; Root = $module.ModuleBase } }
 
     $candidates += $ManagedBenchPilotRoot
+    $candidates += "D:\repos\benchpilot"
 
     foreach ($candidate in $candidates) {
         if (Test-BenchPilotCheckout -Root $candidate) {
             return [pscustomobject]@{ Source = "checkout"; Root = $candidate }
         }
+    }
+
+    $discovered = Find-CheckoutByMarker -MarkerRelativePath "src\BenchPilot.psm1" -Validator { param($root) Test-BenchPilotCheckout -Root $root }
+    if ($discovered) {
+        return [pscustomobject]@{ Source = "discovered"; Root = $discovered }
     }
 
     return $null
@@ -270,11 +357,17 @@ function Find-UnshackledInstall {
     if ($settings.Contains("UnshackledRoot")) { $candidates += [string]$settings.UnshackledRoot }
     if ($catalog.Contains("UnshackledRoot")) { $candidates += [string]$catalog.UnshackledRoot }
     $candidates += $ManagedUnshackledRoot
+    $candidates += "D:\repos\unshackled"
 
     foreach ($candidate in $candidates) {
         if (Test-UnshackledCheckout -Root $candidate) {
             return [pscustomobject]@{ Source = "checkout"; Root = $candidate }
         }
+    }
+
+    $discovered = Find-CheckoutByMarker -MarkerRelativePath "src\entrypoints\cli.tsx" -Validator { param($root) Test-UnshackledCheckout -Root $root }
+    if ($discovered) {
+        return [pscustomobject]@{ Source = "discovered"; Root = $discovered }
     }
 
     return $null
