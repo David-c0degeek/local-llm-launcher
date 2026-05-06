@@ -25,14 +25,17 @@ function Get-ParserLines {
 
         "qwen36" {
             # Qwen 3.5 / 3.6 with the qwen3-coder XML tool format (matches training).
-            # Non-thinking sampling profile.
+            # Non-thinking, coding-oriented sampling profile. Keep presence
+            # penalty off so identifiers, keywords, braces, and import paths
+            # can repeat naturally in generated code.
             $lines.Add("RENDERER qwen3-coder")
             $lines.Add("PARSER qwen3-coder")
             $lines.Add("PARAMETER temperature 0.7")
             $lines.Add("PARAMETER top_k 20")
             $lines.Add("PARAMETER top_p 0.8")
             $lines.Add("PARAMETER min_p 0")
-            $lines.Add("PARAMETER presence_penalty 1.5")
+            $lines.Add("PARAMETER presence_penalty 0")
+            $lines.Add("PARAMETER repeat_penalty 1.05")
             $lines.Add('PARAMETER stop "<|im_end|>"')
             $lines.Add('PARAMETER stop "<|im_start|>"')
         }

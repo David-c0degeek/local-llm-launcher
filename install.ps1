@@ -85,6 +85,31 @@ function Install-File {
         }
     }
     else {
+        if (Test-Path $Destination) {
+            $existing = Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+
+            if ($existing -and $existing.LinkType -eq "SymbolicLink") {
+                $sourcePath = (Resolve-Path -LiteralPath $Source).Path
+                $targetPath = $existing.Target
+
+                if ($targetPath -is [array]) {
+                    $targetPath = $targetPath[0]
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($targetPath) -and (Test-Path -LiteralPath $targetPath)) {
+                    $targetPath = (Resolve-Path -LiteralPath $targetPath).Path
+                }
+
+                if ($targetPath -eq $sourcePath) {
+                    Write-Host "  ok       symlink already points at source: $Destination" -ForegroundColor DarkGreen
+                    return
+                }
+
+                Write-Action "remove symlink" $Destination
+                if (-not $DryRun) { Remove-Item -LiteralPath $Destination -Force }
+            }
+        }
+
         Write-Action "copy" "$Source -> $Destination"
         if (-not $DryRun) {
             Copy-Item -LiteralPath $Source -Destination $Destination -Force

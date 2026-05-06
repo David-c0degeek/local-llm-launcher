@@ -1440,7 +1440,15 @@ function Find-BestLlamaCppConfig {
             Test-LlamaCppKvType -Type $t -Mode $Mode
             $kvPairs += @{ K = $t; V = $t }
         }
-        if ($AggressiveKv) {
+        if (-not $AggressiveKv) {
+            $turbo3 = @($AllowedKvTypes | Where-Object { ([string]$_).ToLowerInvariant() -eq 'turbo3' } | Select-Object -First 1)
+            $turbo4 = @($AllowedKvTypes | Where-Object { ([string]$_).ToLowerInvariant() -eq 'turbo4' } | Select-Object -First 1)
+            if ($turbo3.Count -gt 0 -and $turbo4.Count -gt 0) {
+                # turbo3/turbo4 are non-linear cache encodings; K/V asymmetry can matter.
+                $kvPairs += @{ K = [string]$turbo3[0]; V = [string]$turbo4[0] }
+                $kvPairs += @{ K = [string]$turbo4[0]; V = [string]$turbo3[0] }
+            }
+        } else {
             foreach ($kType in $AllowedKvTypes) {
                 foreach ($vType in $AllowedKvTypes) {
                     if ($kType -eq $vType) { continue }
