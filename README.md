@@ -566,6 +566,11 @@ In the wizard, choose the llama.cpp backend and then **Find best settings** to
 run the same tuner interactively, with prompts to widen KV variation, save the
 winner, and launch immediately with `-AutoBest`.
 
+After a matching best config has been saved, normal wizard launches for the
+same `(model, quant, context, backend mode, VRAM)` automatically replay it and
+skip the manual KV-cache picker. If no matching entry exists, the wizard keeps
+the usual manual KV-cache selection.
+
 ---
 
 ## Wizard

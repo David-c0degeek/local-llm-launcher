@@ -53,6 +53,8 @@ function Invoke-Backend {
         [switch]$LimitTools,
         [Alias("FreeCode", "Fc")][switch]$Unshackled,
         [switch]$Strict,
+        [switch]$AutoBest,
+        [ValidateSet('short','long')][string]$AutoBestProfile = 'short',
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs
     )
@@ -101,6 +103,8 @@ function Invoke-Backend {
                         -LimitTools:$LimitTools `
                         -Unshackled:$Unshackled `
                         -Strict:$Strict `
+                        -AutoBest:$AutoBest `
+                        -AutoBestProfile $AutoBestProfile `
                         -ExtraArgs $ExtraArgs `
                         -ExtraUnshackledArgs $ExtraUnshackledArgs
                 }

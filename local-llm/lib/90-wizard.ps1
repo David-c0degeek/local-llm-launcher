@@ -429,6 +429,22 @@ function Invoke-LlamaCppTunerWizardFlow {
     }
 }
 
+function Test-LlamaCppWizardAutoBestAvailable {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+    )
+
+    try {
+        $entry = Get-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
+        return [bool]($entry -and $entry.overrides)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Invoke-LLMSelection {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -440,6 +456,7 @@ function Invoke-LLMSelection {
         [string]$KvCacheV,
         [switch]$UseQ8,
         [switch]$Strict,
+        [switch]$UseAutoBest,
         [switch]$UseSpectrePrompts
     )
 
@@ -451,14 +468,14 @@ function Invoke-LLMSelection {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict
+                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest
             }
 
             "fc" {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict
+                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -AutoBest:$UseAutoBest
             }
 
             "setup" {
@@ -523,6 +540,7 @@ function Start-LLMWizardClassic {
     $llamaCppMode = $null
     $kvK          = $null
     $kvV          = $null
+    $useAutoBest  = $false
     $step         = 'model'
 
     while ($true) {
@@ -536,6 +554,7 @@ function Start-LLMWizardClassic {
                 if ([string]::IsNullOrWhiteSpace($modelKey)) { return }
 
                 $useStrict = $false
+                $useAutoBest = $false
                 $step = 'quant'
             }
 
@@ -598,8 +617,20 @@ function Start-LLMWizardClassic {
                     break
                 }
                 if ($action -in @("chat", "fc", "claude")) {
-                    $step = if ($backend -eq 'llamacpp') { 'kvcache' } else { 'q8' }
+                    if ($backend -eq 'llamacpp') {
+                        $useAutoBest = Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode
+                        if ($useAutoBest) {
+                            $kvK = $null
+                            $kvV = $null
+                            $step = 'launch'
+                        } else {
+                            $step = 'kvcache'
+                        }
+                    } else {
+                        $step = 'q8'
+                    }
                 } else {
+                    $useAutoBest = $false
                     $step = 'launch'
                 }
             }
@@ -616,6 +647,7 @@ function Start-LLMWizardClassic {
                 if ($null -eq $picked) { $step = 'action'; break }
                 $kvK = $picked.K
                 $kvV = $picked.V
+                $useAutoBest = $false
                 $step = 'launch'
             }
 
@@ -623,7 +655,7 @@ function Start-LLMWizardClassic {
                 try {
                     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
                         -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest
                 }
                 catch {
                     Write-Host "Command failed." -ForegroundColor Red
@@ -977,6 +1009,7 @@ function Start-LLMWizardSpectre {
     $llamaCppMode = $null
     $kvK          = $null
     $kvV          = $null
+    $useAutoBest  = $false
     $step         = 'model'
 
     while ($true) {
@@ -991,6 +1024,7 @@ function Start-LLMWizardSpectre {
                 if ([string]::IsNullOrWhiteSpace($modelKey)) { return }
 
                 $useStrict = $false
+                $useAutoBest = $false
                 $step = 'quant'
             }
 
@@ -1069,8 +1103,20 @@ function Start-LLMWizardSpectre {
                     break
                 }
                 if ($action -in @("chat", "fc", "claude")) {
-                    $step = if ($backend -eq 'llamacpp') { 'kvcache' } else { 'q8' }
+                    if ($backend -eq 'llamacpp') {
+                        $useAutoBest = Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode
+                        if ($useAutoBest) {
+                            $kvK = $null
+                            $kvV = $null
+                            $step = 'launch'
+                        } else {
+                            $step = 'kvcache'
+                        }
+                    } else {
+                        $step = 'q8'
+                    }
                 } else {
+                    $useAutoBest = $false
                     $step = 'launch'
                 }
             }
@@ -1092,6 +1138,7 @@ function Start-LLMWizardSpectre {
                 if ($null -eq $picked) { $step = 'action'; break }
                 $kvK = $picked.K
                 $kvV = $picked.V
+                $useAutoBest = $false
                 $step = 'launch'
             }
 
@@ -1099,7 +1146,7 @@ function Start-LLMWizardSpectre {
                 try {
                     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
                         -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseSpectrePrompts
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -UseSpectrePrompts
                 }
                 catch {
                     Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend/strict=$useStrict)"
