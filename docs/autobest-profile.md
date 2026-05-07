@@ -69,6 +69,13 @@ large prompts a stable cache path. Override these with
 `Set-LocalLLMSetting LlamaCppAgentCacheReuse <n>`; set either value to `0` to
 fall back to llama.cpp defaults for that flag.
 
+Local Claude/Unshackled launches also set
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `LocalModelMaxOutputTokens` (default
+`4096`) before starting the client. This prevents local models from accepting
+the hosted Claude default of 32k output tokens for ordinary turns. Use
+`Set-LocalLLMSetting LocalModelMaxOutputTokens <n>` to change it, or `0` to
+leave the client default untouched.
+
 The wizard exposes saved selection profiles directly. When both `balanced` and
 `pure` entries exist, launch settings include explicit profile choices in
 addition to the `auto` preference (`balanced`, then `pure`). Immediate launch

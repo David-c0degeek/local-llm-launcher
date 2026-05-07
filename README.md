@@ -461,6 +461,7 @@ Set-LocalLLMSetting LlamaCppMlock $false             # disable RAM locking (defa
 Set-LocalLLMSetting LlamaCppNoMmap $false            # disable no-mmap (default $true)
 Set-LocalLLMSetting LlamaCppAgentParallel 1          # agent slots (default 1; 0 = llama.cpp auto)
 Set-LocalLLMSetting LlamaCppAgentCacheReuse 256      # prompt-cache reuse chunk size (default 256; 0 = llama.cpp default)
+Set-LocalLLMSetting LocalModelMaxOutputTokens 4096   # cap local Claude/Unshackled completions (0 = tool default)
 Set-LocalLLMSetting UnshackledRoot $null             # remove an entry
 ```
 

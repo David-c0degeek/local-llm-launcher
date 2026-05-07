@@ -94,6 +94,14 @@ function Set-ClaudeLocalEnv {
         $env:MAX_THINKING_TOKENS = "0"
         $env:CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = "1"
     }
+    $maxOutputTokens = if ($script:Cfg.Contains("LocalModelMaxOutputTokens")) {
+        try { [int]$script:Cfg.LocalModelMaxOutputTokens } catch { 4096 }
+    } else {
+        4096
+    }
+    if ($maxOutputTokens -gt 0) {
+        $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = [string]$maxOutputTokens
+    }
 
     $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
     $env:DISABLE_PROMPT_CACHING = "1"
