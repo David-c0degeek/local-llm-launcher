@@ -573,12 +573,103 @@ function Show-LLMProfileInfo {
     Write-Host ""
 }
 
+function Show-LocalBoxCommandReference {
+    Write-Section "Commands"
+
+    function Write-CommandRow {
+        param(
+            [Parameter(Mandatory = $true)][string]$Command,
+            [Parameter(Mandatory = $true)][string]$Description
+        )
+
+        Write-Host ("  {0,-34} {1}" -f $Command, $Description) -ForegroundColor Gray
+    }
+
+    Write-Host "LocalBox model commands" -ForegroundColor Green
+    Write-Host "  One function is generated for each configured model. Use -Ctx, -Chat, -Q8, -Strict, -Unshackled, and -Quant where supported." -ForegroundColor DarkGray
+    foreach ($key in (@(Get-ModelKeys) | Sort-Object)) {
+        $def = Get-ModelDef -Key $key
+        $name = Get-ModelShortcutName -Def $def
+        $contexts = @($def.Contexts.Keys | Sort-Object | ForEach-Object {
+                if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
+            }) -join ", "
+        if ([string]::IsNullOrWhiteSpace($contexts)) { $contexts = "default" }
+
+        $extra = if ($def.ContainsKey("Quants")) { "; supports -Quant <name>" } else { "" }
+        Write-CommandRow -Command $name -Description ("{0}; contexts: {1}{2}" -f $def.DisplayName, $contexts, $extra)
+    }
+
+    Write-Host ""
+    Write-Host "LocalBox launcher and dashboard" -ForegroundColor Green
+    Write-CommandRow -Command "llm, llmmenu" -Description "Open the guided launcher wizard."
+    Write-CommandRow -Command "llmc" -Description "Open the classic launcher wizard."
+    Write-CommandRow -Command "info [-All] [<model>]" -Description "Show the dashboard or model details."
+    Write-CommandRow -Command "info -Commands" -Description "Show this LocalBox and BenchPilot command list."
+    Write-CommandRow -Command "llminfo" -Description "Alias for info."
+    Write-CommandRow -Command "llmdocs, docs, llmhelp" -Description "Show the quick reference."
+    Write-CommandRow -Command "reloadllm" -Description "Reload llm-models.json and regenerate model commands."
+    Write-CommandRow -Command "llmdefault" -Description "Launch the configured default model."
+    Write-CommandRow -Command "llmdefaultunshackled" -Description "Launch the default model through Unshackled."
+    Write-CommandRow -Command "llmdefaultchat" -Description "Launch the default model as plain Ollama chat."
+    Write-CommandRow -Command "llmlogerr, llmlogerrclear" -Description "Show or clear wizard error logs."
+
+    Write-Host ""
+    Write-Host "LocalBox model setup and catalog" -ForegroundColor Green
+    Write-CommandRow -Command "init [-All] [-Force] [-Stale]" -Description "Create or refresh configured Ollama aliases."
+    Write-CommandRow -Command "initmodel <key> [-Force]" -Description "Create or refresh one configured model."
+    Write-CommandRow -Command "addllm <hf-url-or-repo> -Key <key>" -Description "Add a GGUF model to llm-models.json."
+    Write-CommandRow -Command "updatellm <key>" -Description "Refresh quant metadata for a catalog model."
+    Write-CommandRow -Command "removellm, rmllm" -Description "Remove a configured model."
+    Write-CommandRow -Command "listorphans" -Description "List Ollama models not managed by LocalBox."
+    Write-CommandRow -Command "cleanorphans" -Description "Remove unmanaged Ollama models after confirmation."
+    Write-CommandRow -Command "purge" -Description "Remove configured aliases and GGUF files."
+    Write-CommandRow -Command "setllm <key> <value>" -Description "Update LocalBox settings.json."
+
+    Write-Host ""
+    Write-Host "LocalBox runtime operations" -ForegroundColor Green
+    Write-CommandRow -Command "ops" -Description "Show ollama ps."
+    Write-CommandRow -Command "qkill" -Description "Unload Ollama models."
+    Write-CommandRow -Command "ostop" -Description "Restart/teardown Ollama according to LocalBox runtime rules."
+    Write-CommandRow -Command "lps" -Description "Show llama-server status."
+    Write-CommandRow -Command "lstop" -Description "Stop every llama-server.exe."
+    Write-CommandRow -Command "unloadall, llmstop" -Description "Free local model VRAM across Ollama and llama.cpp."
+    Write-CommandRow -Command "ospeed" -Description "Run an Ollama throughput probe."
+    Write-CommandRow -Command "obench" -Description "Show Ollama benchmark history."
+
+    Write-Host ""
+    Write-Host "LocalBox companion tools" -ForegroundColor Green
+    Write-CommandRow -Command "findbest, tunellm" -Description "Run BenchPilot-backed llama.cpp AutoBest tuning."
+    Write-CommandRow -Command "bp, bpstatus" -Description "Show BenchPilot discovery and version status."
+    Write-CommandRow -Command "Install-BenchPilot" -Description "Clone/configure the managed BenchPilot checkout."
+    Write-CommandRow -Command "Update-BenchPilot" -Description "Fast-forward the configured BenchPilot checkout."
+    Write-CommandRow -Command "Install-Unshackled" -Description "Clone/configure the managed Unshackled checkout."
+    Write-CommandRow -Command "Update-Unshackled" -Description "Fast-forward the configured Unshackled checkout."
+    Write-CommandRow -Command "llm-update, llmupdate" -Description "Update LocalBox plus installed BenchPilot and Unshackled checkouts."
+
+    Write-Host ""
+    Write-Host "BenchPilot commands" -ForegroundColor Green
+    Write-CommandRow -Command "benchpilot info commands" -Description "Show BenchPilot's command reference."
+    Write-CommandRow -Command "benchpilot detect" -Description "Detect hardware and save a hardware profile."
+    Write-CommandRow -Command "benchpilot list-models" -Description "List discoverable local model candidates."
+    Write-CommandRow -Command "benchpilot help" -Description "Show BenchPilot help."
+    Write-CommandRow -Command "Find-BenchPilotBestConfig" -Description "Module API used by LocalBox findbest."
+    Write-CommandRow -Command "Get-BenchPilotBestConfig" -Description "Read the best exported launcher profile."
+    Write-CommandRow -Command "Get-BenchPilotBestConfigCandidates" -Description "Read matching exported launcher profiles."
+    Write-CommandRow -Command "Show-BenchPilotHistory" -Description "Show BenchPilot/LocalBox tuner history for a model."
+}
+
 function info {
     [CmdletBinding()]
     param(
         [Parameter(Position = 0)][string]$Key,
-        [switch]$All
+        [switch]$All,
+        [switch]$Commands
     )
+
+    if ($Commands -or ($Key -in @('commands', 'command', 'cmds'))) {
+        Show-LocalBoxCommandReference
+        return
+    }
 
     if ($Key) {
         $resolved = Resolve-ModelKeyByAnyName -Name $Key
@@ -604,11 +695,12 @@ function llminfo {
     [CmdletBinding()]
     param(
         [Parameter(Position = 0)][string]$Key,
-        [switch]$All
+        [switch]$All,
+        [switch]$Commands
     )
 
-    if ($Key) {
-        info -Key $Key
+    if ($Commands -or $Key) {
+        info -Key $Key -Commands:$Commands
         return
     }
 
@@ -718,6 +810,7 @@ Manage
   info                  Dashboard, recommended models only (rich UI if PwshSpectreConsole is installed)
   info -All             Dashboard with experimental + legacy
   info <key>            Per-model detail: description, quants table (with fit + size), contexts table
+  info -Commands        Full LocalBox and BenchPilot command list
   reloadllm             Reload llm-models.json and regenerate commands
   llm-update            Update LocalBox, Unshackled, and BenchPilot when installed
   ops, qkill, ostop     Ollama: list / stop loaded / restart

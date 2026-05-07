@@ -74,6 +74,7 @@ qcoder -Ctx 256 -Quant iq4xs  # 256k coder context (4090 ceiling)
 llmdefault                    # whatever the catalog / settings / .llm-default says
 llm                           # interactive wizard (Spectre-rendered when available)
 info                          # dashboard: VRAM fit, parser freshness, defaults
+info -Commands                # full LocalBox + BenchPilot command list
 ```
 
 ---
@@ -328,6 +329,7 @@ llmdefaultchat                Same, plain chat
 llm                           Guided wizard
 llmc                          Wizard, Spectre bypass (force classic)
 info                          Dashboard
+info -Commands                Full LocalBox + BenchPilot command list
 llmdocs                       Quick reference
 llm-update                    Update LocalBox + installed companion checkouts
 ```
@@ -353,8 +355,9 @@ qcoder -Ctx 256 -Quant iq4xs -Unshackled  # Unshackled @ 256k
 
 Weights ~16.5 GB; q4_0 KV @ 256k ~6 GB; total ~23.6 GB. The launcher will
 **refuse `-Q8` at this context** because q8 KV would push KV cache to ~12 GB
-and OOM the card. Run `llmdocs` for the full quick reference, or `info` for
-the dashboard.
+and OOM the card. Run `llmdocs` for the full quick reference, `info` for the
+dashboard, or `info -Commands` for the generated model commands plus LocalBox
+and BenchPilot management commands.
 
 ---
 
