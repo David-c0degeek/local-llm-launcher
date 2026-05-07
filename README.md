@@ -724,4 +724,3 @@ setups, so they stay.
 ## More
 
 - `CHANGELOG.md` — what shipped, when.
-- `analysis.md` / `plan-next.md` — second-pass review and planned work.
