@@ -412,6 +412,26 @@ function Read-LLMTuneOptimize {
     return [string]$items[$idx].Key
 }
 
+function Read-LLMTuneProfile {
+    $items = @(
+        [pscustomobject]@{ Key = 'pure';     Label = 'Pure';   Description = 'Fastest measured LLM throughput' },
+        [pscustomobject]@{ Key = 'balanced'; Label = 'Usable'; Description = 'Prefer throughput with workstation headroom' },
+        [pscustomobject]@{ Key = 'both';     Label = 'Both';   Description = 'Run and save pure plus usable profiles' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Selection profile" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
+
+    if ($idx -lt 0) { return $null }
+    return [string]$items[$idx].Key
+}
+
 function Invoke-LlamaCppTunerWizardFlow {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -435,6 +455,13 @@ function Invoke-LlamaCppTunerWizardFlow {
     }
     if ([string]::IsNullOrWhiteSpace($optimize)) { return }
 
+    $selectionProfile = if ($UseSpectrePrompts) {
+        Read-LLMTuneProfileSpectre
+    } else {
+        Read-LLMTuneProfile
+    }
+    if ([string]::IsNullOrWhiteSpace($selectionProfile)) { return }
+
     $allowKv = if ($UseSpectrePrompts) {
         Read-LLMTuneKvVariationSpectre
     } else {
@@ -454,22 +481,33 @@ function Invoke-LlamaCppTunerWizardFlow {
 
     $def = Get-ModelDef -Key $ModelKey
     $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
-    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Quant $quant -AllowedKvTypes $allowedKvTypes -Deep:$useDeep -Optimize $optimize -NoSave
+    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Quant $quant -AllowedKvTypes $allowedKvTypes -Deep:$useDeep -Optimize $optimize -Profile $selectionProfile -NoSave
+    $results = @($result | Where-Object { $_ })
 
     Write-Host ""
-    Write-Host "Best tuner result:" -ForegroundColor Green
-    Write-Host ("  score     : {0:N2} ({1})" -f $result.Score, $result.ScoreUnit) -ForegroundColor Green
-    Write-Host ("  overrides : {0}" -f (Format-LlamaCppOverrides -Overrides $result.Overrides)) -ForegroundColor DarkGray
+    $resultTitle = if ($results.Count -eq 1) { "Best tuner result:" } else { "Best tuner results:" }
+    Write-Host $resultTitle -ForegroundColor Green
+    foreach ($item in $results) {
+        $profileLabel = if ($item.Profile) { [string]$item.Profile } else { 'pure' }
+        Write-Host ("  [{0}] score     : {1:N2} ({2})" -f $profileLabel, $item.Score, $item.ScoreUnit) -ForegroundColor Green
+        Write-Host ("  [{0}] overrides : {1}" -f $profileLabel, (Format-LlamaCppOverrides -Overrides $item.Overrides)) -ForegroundColor DarkGray
+    }
     Write-Host ""
 
-    if ($result.report_path) {
+    $reportResults = @($results | Where-Object { $_.report_path })
+    if ($reportResults.Count -gt 0) {
+        $reportPrompt = if ($reportResults.Count -eq 1) { "Open BenchPilot report?" } else { "Open BenchPilot reports?" }
         $openReport = if ($UseSpectrePrompts) {
-            Read-LLMYesNoSpectre -Message "Open BenchPilot report?" -DefaultYes
+            Read-LLMYesNoSpectre -Message $reportPrompt -DefaultYes
         } else {
-            Read-LLMYesNo -Prompt "Open BenchPilot report?" -DefaultYes:$true
+            Read-LLMYesNo -Prompt $reportPrompt -DefaultYes:$true
         }
-        if ($openReport -and (Test-Path -LiteralPath $result.report_path)) {
-            Invoke-Item -LiteralPath $result.report_path
+        if ($openReport) {
+            foreach ($item in $reportResults) {
+                if (Test-Path -LiteralPath $item.report_path) {
+                    Invoke-Item -LiteralPath $item.report_path
+                }
+            }
         }
     }
 
@@ -479,30 +517,57 @@ function Invoke-LlamaCppTunerWizardFlow {
         Read-LLMYesNo -Prompt "Save as the default for this machine?" -DefaultYes:$true
     }
     if ($saveAnswer) {
-        if ($result.source -eq 'benchpilot' -and (Get-Command Export-BenchPilotLauncherProfile -ErrorAction SilentlyContinue)) {
-            $saved = Export-BenchPilotLauncherProfile `
-                -Key $ModelKey `
-                -ContextKey $ContextKey `
-                -Mode $Mode `
-                -Quant $result.Quant `
-                -VramGB $result.VramGB `
-                -PromptLength $result.PromptLength `
-                -Overrides $result.Overrides `
-                -Args @($result.Args) `
-                -Score $result.Score `
-                -ScoreUnit $result.ScoreUnit `
-                -TrialCount $result.TrialCount `
-                -NativeProfilePath $result.native_profile_path `
-                -ReportPath $result.report_path
-        } else {
-            $saved = Save-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode `
-                -Quant $result.Quant -VramGB $result.VramGB `
-                -PromptLength $result.PromptLength `
-                -BestArgs $result.Args -BestOverrides $result.Overrides `
-                -Score $result.Score -ScoreUnit $result.ScoreUnit `
-                -TrialCount $result.TrialCount
+        foreach ($item in $results) {
+            $itemProfile = if ($item.Profile) { [string]$item.Profile } else { 'pure' }
+            if ($item.source -eq 'benchpilot' -and (Get-Command Export-BenchPilotLauncherProfile -ErrorAction SilentlyContinue)) {
+                $saveParams = @{
+                    Key               = $ModelKey
+                    ContextKey        = $ContextKey
+                    Mode              = $Mode
+                    Quant             = $item.Quant
+                    VramGB            = $item.VramGB
+                    PromptLength      = $item.PromptLength
+                    Overrides         = $item.Overrides
+                    Args              = @($item.Args)
+                    Score             = $item.Score
+                    ScoreUnit         = $item.ScoreUnit
+                    TrialCount        = $item.TrialCount
+                    Profile           = $itemProfile
+                    NativeProfilePath = $item.native_profile_path
+                    ReportPath        = $item.report_path
+                }
+                if (-not [string]::IsNullOrWhiteSpace($item.SearchStrategy)) { $saveParams.SearchStrategy = $item.SearchStrategy }
+                if ($null -ne $item.BeamWidth) { $saveParams.BeamWidth = $item.BeamWidth }
+                if ($null -ne $item.PureScore) { $saveParams.PureScore = $item.PureScore }
+                if ($null -ne $item.Telemetry) { $saveParams.Telemetry = $item.Telemetry }
+                if ($null -ne $item.ScoreBreakdown) { $saveParams.ScoreBreakdown = $item.ScoreBreakdown }
+
+                $saved = Export-BenchPilotLauncherProfile @saveParams
+            } else {
+                $saveParams = @{
+                    Key            = $ModelKey
+                    ContextKey     = $ContextKey
+                    Mode           = $Mode
+                    Quant          = $item.Quant
+                    VramGB         = $item.VramGB
+                    PromptLength   = $item.PromptLength
+                    BestArgs       = $item.Args
+                    BestOverrides  = $item.Overrides
+                    Score          = $item.Score
+                    ScoreUnit      = $item.ScoreUnit
+                    TrialCount     = $item.TrialCount
+                    Profile        = $itemProfile
+                }
+                if (-not [string]::IsNullOrWhiteSpace($item.SearchStrategy)) { $saveParams.SearchStrategy = $item.SearchStrategy }
+                if ($null -ne $item.BeamWidth) { $saveParams.BeamWidth = $item.BeamWidth }
+                if ($null -ne $item.PureScore) { $saveParams.PureScore = $item.PureScore }
+                if ($item.Telemetry -is [System.Collections.IDictionary]) { $saveParams.Telemetry = $item.Telemetry }
+                if ($item.ScoreBreakdown -is [System.Collections.IDictionary]) { $saveParams.ScoreBreakdown = $item.ScoreBreakdown }
+
+                $saved = Save-BestLlamaCppConfig @saveParams
+            }
+            Write-Host "Saved best -> $saved" -ForegroundColor DarkGray
         }
-        Write-Host "Saved best -> $saved" -ForegroundColor DarkGray
     }
 
     $launchAnswer = if ($UseSpectrePrompts) {
@@ -528,7 +593,7 @@ function Invoke-LlamaCppTunerWizardFlow {
             ContextKey      = $ContextKey
             Mode            = $Mode
             AutoBest        = $true
-            AutoBestProfile = if ($result.PromptLength) { [string]$result.PromptLength } else { 'short' }
+            AutoBestProfile = if ($selectionProfile -eq 'pure') { 'pure' } elseif ($selectionProfile -eq 'balanced') { 'balanced' } else { 'auto' }
         }
         if ($launchAction -eq 'unshackled') {
             $launchArgs.Unshackled = $true
@@ -1228,6 +1293,19 @@ function Read-LLMTuneOptimizeSpectre {
         '[[Back]]'                                                     = '__back__'
     }
     $chosen = Read-SpectreSelection -Message "Tune goal" -Choices @($choices.Keys) -PageSize 7
+    if ($null -eq $chosen) { return $null }
+    if ($chosen -eq '[[Back]]') { return $null }
+    return [string]$choices[$chosen]
+}
+
+function Read-LLMTuneProfileSpectre {
+    $choices = [ordered]@{
+        'Pure   - fastest measured LLM throughput'      = 'pure'
+        'Usable - keep workstation headroom'            = 'balanced'
+        'Both   - run and save pure plus usable'        = 'both'
+        '[[Back]]'                                      = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Selection profile" -Choices @($choices.Keys) -PageSize 6
     if ($null -eq $chosen) { return $null }
     if ($chosen -eq '[[Back]]') { return $null }
     return [string]$choices[$chosen]
