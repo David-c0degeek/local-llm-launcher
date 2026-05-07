@@ -550,6 +550,60 @@ same binary LocalBox will actually launch. Upstream `llama-bench` has KV-cache
 flags (`-ctk` / `-ctv`), but TurboQuant cache types only work in a fork/build
 that registers them; LocalBox's turboquant path uses TheTom's fork.
 
+During a run, BenchPilot prints one row per candidate:
+
+```text
+Waiting for llama-server...
+  [ 4] OK   pp= 645.95 tg=  58.39  score= 559.36  phase=moe          NCpuMoe=20 KvK=q8_0 KvV=q8_0
+```
+
+**Live output legend:**
+
+- `[ 4]` — trial number within this tuning run.
+- `OK` / `OOM` / `FAIL` — candidate status. `OOM` means the trial exhausted
+  memory; `FAIL` means startup or probing failed for another reason.
+- `pp` — prompt-processing / prefill throughput, in tokens/sec. This measures
+  how fast llama.cpp consumes the input prompt before generation starts.
+- `tg` — text-generation throughput, in tokens/sec after generation starts.
+- `score` — the value BenchPilot is optimizing. With the default
+  `-Optimize coding-agent`, this is effective end-to-end tokens/sec for a large
+  coding-agent prompt plus a moderate generated reply, so higher is better.
+  With `-Optimize gen`, it follows `tg`; with `-Optimize prompt`, it follows
+  `pp`; with `-Optimize both`, it uses a balanced prompt/generation score.
+- `phase` — which search step produced the candidate. Common values are
+  `baseline`, `moe`, `ngl`, `batching`, `flash`, `mmap`, `threads`, `kv`,
+  `verify`, and, with `-Deep`, `deep_moe`, `deep_ngl`, `deep_batching`,
+  `deep_flash`, and `deep_threads`.
+
+Extra `Name=value` pairs at the end are the settings changed for that trial:
+
+- `NCpuMoe` — llama.cpp `--n-cpu-moe`, the number of MoE expert layers kept on
+  CPU. Lower usually moves more expert work to GPU, which is faster but uses
+  more VRAM.
+- `NGpuLayers` — llama.cpp `-ngl` / `--n-gpu-layers`, the dense-model layer
+  offload count. Higher generally uses more GPU and more VRAM.
+- `UbatchSize` — llama.cpp `--ubatch-size`, the physical microbatch size used
+  during prompt processing.
+- `BatchSize` — llama.cpp `--batch-size`, the logical prompt batch size.
+- `Threads` — llama.cpp `--threads`, CPU threads for generation/eval work.
+- `ThreadsBatch` — llama.cpp `--threads-batch`, CPU threads for prompt batch
+  processing.
+- `FlashAttn` — flash-attention on/off.
+- `Mlock` — llama.cpp `--mlock`, requests locking model/cache pages in memory.
+- `NoMmap` — llama.cpp `--no-mmap`, loads model weights without memory mapping.
+- `KvK` — KV-cache type for attention keys, passed as `-ctk`.
+- `KvV` — KV-cache type for attention values, passed as `-ctv`.
+
+KV-cache values are llama.cpp cache quant types such as `f16`, `q8_0`, `q4_0`,
+or, in TheTom turboquant builds, `turbo3` / `turbo4`. KV changes can affect
+quality, so BenchPilot only widens that search when requested and can run a
+perplexity sanity check before saving a faster KV pair.
+
+Skip/pruning messages use the same ideas with shorter llama.cpp-style labels:
+`ngl` means `NGpuLayers`, `ub` means `UbatchSize`, `b` means `BatchSize`,
+`flash` means `FlashAttn`, `threads` means `Threads` / `ThreadsBatch`, and
+`kv K=... V=...` means the `KvK` / `KvV` pair being tested.
+
 **What gets searched:**
 
 1. **baseline** — catalog defaults, one probe.
