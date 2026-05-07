@@ -530,6 +530,12 @@ findbest q36plus -ContextKey 256k -Quick
 # Deep mode — normal phases, then finer local offload/batch/thread refinement
 findbest q36plus -ContextKey 256k -Deep
 
+# Save both the fastest raw profile and a workstation-friendly balanced profile
+findbest q36plus -ContextKey 256k -Profile both
+
+# Force the expanded beam search and keep three survivors after each phase
+findbest q36plus -ContextKey 256k -SearchStrategy beam -BeamWidth 3
+
 # Optimize for prompt-eval (prefill) or generation explicitly
 findbest q36plus -ContextKey 256k -Optimize prompt
 findbest q36plus -ContextKey 256k -Optimize gen
@@ -573,6 +579,8 @@ Waiting for llama-server...
   coding-agent prompt plus a moderate generated reply, so higher is better.
   With `-Optimize gen`, it follows `tg`; with `-Optimize prompt`, it follows
   `pp`; with `-Optimize both`, it uses a balanced prompt/generation score.
+  With `-Profile balanced`, BenchPilot stores the selected balanced score and
+  also preserves the raw pure score for comparison.
 - `phase` — which search step produced the candidate. Common values are
   `baseline`, `moe`, `ngl`, `batching`, `flash`, `mmap`, `threads`, `kv`,
   `verify`, and, with `-Deep`, `deep_moe`, `deep_ngl`, `deep_batching`,
@@ -609,6 +617,13 @@ Skip/pruning messages use the same ideas with shorter llama.cpp-style labels:
 
 **What gets searched:**
 
+BenchPilot supports two search strategies. `greedy` keeps only the current best
+candidate after each phase. `beam` keeps the top `-BeamWidth` candidates, so a
+near-winner from the MoE/NGL phase can still combine with later batching,
+flash-attention, mmap/mlock, and thread settings. Normal pure runs default to
+`greedy` with width 1. `-Deep` or any balanced profile defaults to `beam` with
+width 3 unless you pass `-SearchStrategy` / `-BeamWidth` explicitly.
+
 1. **baseline** — catalog defaults, one probe.
 2. **moe_or_ngl** — for MoE models, sweep `--n-cpu-moe` to find the smallest
    value that still fits VRAM (more layers on GPU = faster). For dense models
@@ -637,26 +652,39 @@ for a local coding-agent request: large prompt prefill plus a moderate generated
 reply. That prevents decode-only winners with high generation TPS and poor
 prompt-processing TPS from being saved as "best".
 
+`-Profile pure` selects the highest measured LLM throughput. `-Profile
+balanced` starts from that pure score and applies visible CPU, RAM, VRAM,
+variance, and stability factors so the saved launch leaves more workstation
+headroom. `-Profile both` runs and saves both profile types for the same target.
+Balanced reports include the pure score and score-factor breakdown when
+telemetry is available.
+
 OOM/failure is detected from process output; OOM-monotonicity prunes branches
 that are guaranteed to fail. Saved entries include the GPU name and llama.cpp
 build stamp, so `-AutoBest` can warn when a re-tune is advisable after a
-hardware or llama.cpp upgrade. Tuner version changes require a re-tune.
+hardware or llama.cpp upgrade. Saved entries also include `profile`,
+`searchStrategy`, `beamWidth`, `pureScore`, optional `telemetry`, and optional
+`scoreBreakdown`; older entries without `profile` are treated as `pure`. Tuner
+version changes require a re-tune.
 
 `-PromptLengths short,long` stores separate profile entries. `-AutoBest`
-defaults to `auto`: it prefers long/coding-agent profiles, then falls back to
-short profiles when that is all you have. Use `-AutoBestProfile short` or
-`-AutoBestProfile long` to force one profile.
+defaults to `auto`: it prefers `balanced` when present, falls back to `pure`,
+and within each profile prefers long/coding-agent prompt profiles before short
+profiles. Use `-AutoBestProfile pure` or `-AutoBestProfile balanced` to force
+the selection profile. `-AutoBestProfile short` and `-AutoBestProfile long`
+remain available as legacy prompt-length overrides and force a pure profile.
 
 **Replaying the saved best:**
 
 ```powershell
 Start-ClaudeWithLlamaCppModel -Key q36plus -ContextKey 256k -Mode native -AutoBest
+Start-ClaudeWithLlamaCppModel -Key q36plus -ContextKey 256k -Mode native -AutoBest -AutoBestProfile balanced
 ```
 
-The launcher matches the saved entry on `(key, contextKey, mode, vramGB ± 1)`
-and a tuner-version stamp; on a miss it warns and falls through to defaults.
-Caller-supplied `-KvCacheK` / `-KvCacheV` / `-ExtraArgs` always win over the
-saved values.
+The launcher matches the saved entry on `(key, contextKey, mode, profile,
+prompt_length, quant, vramGB ± 1)` and a tuner-version stamp; on a miss it
+warns and falls through to defaults. Caller-supplied `-KvCacheK` / `-KvCacheV`
+/ `-ExtraArgs` always win over the saved values.
 
 In the wizard, choose the llama.cpp backend and then **Find best settings** to
 run the same tuner interactively, with prompts for normal vs deep tuning, KV
