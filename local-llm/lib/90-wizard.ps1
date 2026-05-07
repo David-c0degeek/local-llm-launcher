@@ -679,7 +679,7 @@ function Get-LlamaCppWizardAutoBestChoices {
         [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
     )
 
-    $choices = New-Object System.Collections.Generic.List[object]
+    $choices = @()
     foreach ($profileName in @('balanced', 'pure')) {
         try {
             $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Profile $profileName
@@ -696,12 +696,12 @@ function Get-LlamaCppWizardAutoBestChoices {
             } else {
                 "Apply saved pure AutoBest settings ($score)"
             }
-            $choices.Add([pscustomobject]@{
+            $choices += [pscustomobject]@{
                 Key = "best:$profileName"
                 Label = $label
                 Description = $description
                 Profile = $profileName
-            }) | Out-Null
+            }
         }
         catch {}
     }
