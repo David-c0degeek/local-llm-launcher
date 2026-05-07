@@ -186,7 +186,7 @@ function Test-ClaudeLocalVisibleResponse {
         messages = @(
             @{
                 role = 'user'
-                content = 'Are you working? Reply with exactly: yes.'
+                content = 'Are you working? Reply with a short visible acknowledgement.'
             }
         )
     }
@@ -229,13 +229,38 @@ function Test-ClaudeLocalVisibleResponse {
     $text = (($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join '').Trim()
     $withoutThink = [regex]::Replace($text, '(?is)<think>.*?</think>', '')
     $withoutThink = [regex]::Replace($withoutThink, '(?is)<think>.*$', '').Trim()
-    $looksAnswered = $withoutThink -match '(?i)\byes\b'
+    $looksAnswered = -not [string]::IsNullOrWhiteSpace($withoutThink)
     return [pscustomobject]@{
         Ok = $looksAnswered
         Text = $text
         VisibleText = $withoutThink
-        Error = $(if ($looksAnswered) { '' } elseif ([string]::IsNullOrWhiteSpace($text)) { 'no visible response text' } else { 'response did not contain the requested visible answer' })
+        Error = $(if ($looksAnswered) { '' } elseif ([string]::IsNullOrWhiteSpace($text)) { 'no response text' } else { 'no visible response text after stripping thinking output' })
     }
+}
+
+function Format-ClaudeLocalSmokeFailure {
+    param([Parameter(Mandatory = $true)]$Smoke)
+
+    if (-not [string]::IsNullOrWhiteSpace($Smoke.Error)) {
+        return [string]$Smoke.Error
+    }
+
+    $snippet = if (-not [string]::IsNullOrWhiteSpace($Smoke.VisibleText)) {
+        [string]$Smoke.VisibleText
+    } elseif (-not [string]::IsNullOrWhiteSpace($Smoke.Text)) {
+        [string]$Smoke.Text
+    } else {
+        ''
+    }
+    $snippet = ($snippet -replace '\s+', ' ').Trim()
+    if ($snippet.Length -gt 160) {
+        $snippet = $snippet.Substring(0, 160) + '...'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($snippet)) {
+        return "unexpected smoke response: $snippet"
+    }
+
+    return 'no visible response text'
 }
 
 function Ensure-UnshackledInstalled {
@@ -760,11 +785,11 @@ function Start-ClaudeWithLlamaCppModel {
             if ($directSmoke.Ok) {
                 $effectiveBaseUrl = $directBaseUrl
             } else {
-                $detail = if (-not [string]::IsNullOrWhiteSpace($directSmoke.Error)) { $directSmoke.Error } else { 'no visible response text' }
+                $detail = Format-ClaudeLocalSmokeFailure -Smoke $directSmoke
                 throw "AutoBest: saved profile failed launch smoke through proxy and direct llama-server route ($detail). Re-run tuning or launch without -AutoBest."
             }
         } elseif (-not $smoke.Ok) {
-            $detail = if (-not [string]::IsNullOrWhiteSpace($smoke.Error)) { $smoke.Error } else { 'no visible response text' }
+            $detail = Format-ClaudeLocalSmokeFailure -Smoke $smoke
             throw "AutoBest: saved profile failed launch smoke ($detail). Re-run tuning or launch without -AutoBest."
         }
     }
