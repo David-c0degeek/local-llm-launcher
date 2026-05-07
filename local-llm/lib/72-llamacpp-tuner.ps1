@@ -44,6 +44,35 @@ function Get-LlamaCppGpuNames {
     }
 }
 
+function Format-LlamaCppOverrides {
+    # One-line stable display form for AutoBest overrides returned by BenchPilot
+    # or loaded from the local profile cache.
+    param([Parameter(Mandatory = $true)]$Overrides)
+
+    $parts = @()
+    foreach ($k in @('NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','FlashAttn','Mlock','NoMmap','KvK','KvV')) {
+        $value = $null
+        $hasValue = $false
+
+        if ($Overrides -is [System.Collections.IDictionary]) {
+            $hasValue = $Overrides.Contains($k)
+            if ($hasValue) { $value = $Overrides[$k] }
+        } else {
+            $prop = $Overrides.PSObject.Properties[$k]
+            if ($prop) {
+                $hasValue = $true
+                $value = $prop.Value
+            }
+        }
+
+        if ($hasValue -and $null -ne $value) {
+            $parts += "$k=$value"
+        }
+    }
+
+    return ($parts -join ' ')
+}
+
 function Save-LlamaCppBestConfig {
     [CmdletBinding()]
     param(
