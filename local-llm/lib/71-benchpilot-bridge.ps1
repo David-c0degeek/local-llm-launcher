@@ -169,6 +169,7 @@ function Invoke-BenchPilotLauncherFindBest {
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
+        [string]$Quant,
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
@@ -200,6 +201,7 @@ function Invoke-BenchPilotLauncherFindBest {
         Key = $Key
         ContextKey = $ContextKey
         Mode = $Mode
+        Quant = $Quant
         PromptLengths = $PromptLengths
         AllowedKvTypes = $AllowedKvTypes
         Optimize = $Optimize

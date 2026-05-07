@@ -452,7 +452,9 @@ function Invoke-LlamaCppTunerWizardFlow {
         }
     }
 
-    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -AllowedKvTypes $allowedKvTypes -Deep:$useDeep -Optimize $optimize -NoSave
+    $def = Get-ModelDef -Key $ModelKey
+    $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
+    $result = Find-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Quant $quant -AllowedKvTypes $allowedKvTypes -Deep:$useDeep -Optimize $optimize -NoSave
 
     Write-Host ""
     Write-Host "Best tuner result:" -ForegroundColor Green
