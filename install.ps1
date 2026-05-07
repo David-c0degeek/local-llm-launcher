@@ -333,7 +333,6 @@ function Find-BenchPilotInstall {
     if ($module) { return [pscustomobject]@{ Source = "module"; Root = $module.ModuleBase } }
 
     $candidates += $ManagedBenchPilotRoot
-    $candidates += "D:\repos\benchpilot"
 
     foreach ($candidate in $candidates) {
         if (Test-BenchPilotCheckout -Root $candidate) {
@@ -357,7 +356,6 @@ function Find-UnshackledInstall {
     if ($settings.Contains("UnshackledRoot")) { $candidates += [string]$settings.UnshackledRoot }
     if ($catalog.Contains("UnshackledRoot")) { $candidates += [string]$catalog.UnshackledRoot }
     $candidates += $ManagedUnshackledRoot
-    $candidates += "D:\repos\unshackled"
 
     foreach ($candidate in $candidates) {
         if (Test-UnshackledCheckout -Root $candidate) {
@@ -513,6 +511,8 @@ Write-Host "  Mode     : $(if ($Symlink) { 'symlink' } else { 'copy' })$(if ($Dr
 Write-Host ""
 
 if ($installFiles) {
+    Set-InstallSetting -Key "LocalBoxRoot" -Value $RepoRoot
+
     Install-Dir-Files `
         -SourceDir (Join-Path $RepoRoot "local-llm") `
         -TargetDir $DeployedLocalLLM `
@@ -551,7 +551,7 @@ if (-not $DryRun) {
     Write-Host ""
     Write-Host "Per-machine settings (paths, defaults) belong in ~/.local-llm/settings.json." -ForegroundColor DarkGray
     Write-Host "Use the helper instead of editing JSON:" -ForegroundColor DarkGray
-    Write-Host "  Set-LocalLLMSetting UnshackledRoot 'C:\path\to\unshackled'" -ForegroundColor DarkGray
-    Write-Host "  Set-LocalLLMSetting BenchPilotRoot 'C:\path\to\benchpilot'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting UnshackledRoot '<path-to-unshackled>'" -ForegroundColor DarkGray
+    Write-Host "  Set-LocalLLMSetting BenchPilotRoot '<path-to-benchpilot>'" -ForegroundColor DarkGray
     Write-Host "  Set-LocalLLMSetting Default q36plus" -ForegroundColor DarkGray
 }

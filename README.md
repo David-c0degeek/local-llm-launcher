@@ -31,7 +31,7 @@ KV-cache type, sampling, system prompt, and tool allowlist for each model family
   optimizer: it benchmarks local models and exports recommended launcher
   profiles.
 - [Unshackled](https://github.com/David-c0degeek/unshackled) is the free Claude
-  Code fork that the launcher can target with `-Fc` / `-Unshackled`.
+  Code fork that the launcher can target with `-Unshackled`.
 
 ---
 
@@ -60,7 +60,7 @@ That sounds simple. In practice it isn't:
   256 k are physically different aliases. The launcher generates and tracks
   them; a sidecar version stamp catches drift when parsers or contexts change.
 - **Two harnesses, one dispatch path.** Whether you launch Claude Code or
-  Unshackled, the same env stack and proxy is set up — `-Fc` is just a
+  Unshackled, the same env stack and proxy is set up through the `-Unshackled`
   switch on every model function.
 
 The end result: one PowerShell function per model, flag-based, with the
@@ -68,7 +68,7 @@ fiddly bits (process bouncing, env restoration, cache types, KV ceilings,
 tool allowlists, system prompts, parser stamps) hidden behind it.
 
 ```powershell
-qcoder -Ctx fast -Fc          # Qwen3-Coder @ 32k → Unshackled
+qcoder -Ctx fast -Unshackled  # Qwen3-Coder @ 32k -> Unshackled
 q36p -Ctx 128                 # Qwen 3.6 Plus @ 128k → Claude Code
 qcoder -Ctx 256 -Quant iq4xs  # 256k coder context (4090 ceiling)
 llmdefault                    # whatever the catalog / settings / .llm-default says
@@ -111,7 +111,7 @@ What happens:
 The model believes it's Claude. Claude Code believes it's talking to Anthropic.
 The proxy quietly strips Anthropic-only fields the local backend can't parse.
 
-### Unshackled harness (`-Fc`)
+### Unshackled Harness
 
 Same flow, except the launch shells into `bun src/entrypoints/cli.tsx` against
 an [Unshackled](https://github.com/David-c0degeek/unshackled) checkout instead
@@ -120,14 +120,12 @@ offers to `git clone` from `UnshackledRepoUrl` (default
 `https://github.com/David-c0degeek/unshackled`). Decline to abort.
 
 ```powershell
-qcoder -Ctx fast -Fc          # alias: -FreeCode, canonical: -Unshackled
+qcoder -Ctx fast -Unshackled
 ```
 
-`-Fc` exists because Claude Code is occasionally restrictive in ways a local
-model shouldn't be — refusing mundane edits, chasing safety theatre, or
-declining tool calls a 30B uncensored Qwen would happily do. Unshackled is a
-fork of Claude Code with those edges sanded off. The launcher treats it as
-peer to Claude Code: same env stack, same proxy, same tool restrictions.
+Use `-Unshackled` when you want the local model behind the Unshackled harness
+instead of Claude Code. The launcher treats it as a peer to Claude Code: same
+env stack, same proxy, same tool restrictions.
 
 ### Strict overlay (engineering harness)
 
@@ -306,6 +304,8 @@ The install step offers to clone missing BenchPilot and Unshackled checkouts
 into `~/.local-llm/tools/`. Use `-SkipToolPrompts` for unattended installs.
 `Show-Diagnostics` also reports on `ollama`, `python`, `bun` (only needed for
 Unshackled), `PwshSpectreConsole`, BenchPilot, and Unshackled.
+Installs also record `LocalBoxRoot` in `settings.json`, which lets `llm-update`
+pull this repo and redeploy the profile files later.
 
 ---
 
@@ -314,27 +314,28 @@ Unshackled), `PwshSpectreConsole`, BenchPilot, and Unshackled.
 One function per model. Flag-based:
 
 ```
-qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, Unshackled)
-q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, Unshackled)
+qcoder -Ctx fast -Unshackled  Code agent (Qwen3-Coder, 32k, Unshackled)
+q36p -Ctx fast -Unshackled    General Qwen 3.6 agent (32k, Unshackled)
 dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
-q36p -Ctx 128 -Fc             Big context (Qwen 3.6 Plus, 128k)
+q36p -Ctx 128 -Unshackled     Big context (Qwen 3.6 Plus, 128k)
 qcoder -Ctx 256 -Quant iq4xs  256k coder context (4090 ceiling — no -Q8)
 q36p -Chat                    Raw ollama chat, no Claude Code
 q36p -Q8                      Use q8 KV cache for higher quality
 q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
 llmdefault                    Launch the configured Default model
-llmdefaultfc                  Same, via Unshackled
+llmdefaultunshackled          Same, via Unshackled
 llmdefaultchat                Same, plain chat
 llm                           Guided wizard
 llmc                          Wizard, Spectre bypass (force classic)
 info                          Dashboard
 llmdocs                       Quick reference
+llm-update                    Update LocalBox + installed companion checkouts
 ```
 
 | Flag | Effect |
 |------|--------|
 | `-Ctx <name>` | One of the model's context keys (`fast`, `deep`, `128`, `256`). Omit for default. |
-| `-Fc` (alias `-FreeCode`, canonical `-Unshackled`) | Use Unshackled instead of Claude Code. |
+| `-Unshackled` | Use Unshackled instead of Claude Code. |
 | `-Chat` | Run plain `ollama run`, skip Claude Code entirely. |
 | `-Q8` | Set `OLLAMA_KV_CACHE_TYPE=q8_0` for this launch. Refused above the VRAM-derived `Q8KvMaxContext` ceiling — q8 KV at long context will OOM. |
 | `-Quant <name>` | Switch the model's selected GGUF quant. No launch — rebuilds the alias. |
@@ -347,7 +348,7 @@ the **IQ4_XS** quant with **q4_0 KV cache** is the only setup that fits a full
 
 ```powershell
 qcoder -Ctx 256 -Quant iq4xs        # Claude Code @ 256k
-qcoder -Ctx 256 -Quant iq4xs -Fc    # Unshackled @ 256k
+qcoder -Ctx 256 -Quant iq4xs -Unshackled  # Unshackled @ 256k
 ```
 
 Weights ~16.5 GB; q4_0 KV @ 256k ~6 GB; total ~23.6 GB. The launcher will
@@ -435,8 +436,9 @@ fix paths on a fresh machine.
 Use the helper instead of editing JSON:
 
 ```powershell
-Set-LocalLLMSetting UnshackledRoot 'C:\repos\unshackled'
-Set-LocalLLMSetting BenchPilotRoot 'C:\repos\benchpilot'
+Set-LocalLLMSetting UnshackledRoot '<path-to-unshackled>'   # usually auto-set by install.ps1
+Set-LocalLLMSetting BenchPilotRoot '<path-to-benchpilot>'   # usually auto-set by install.ps1
+Set-LocalLLMSetting LocalBoxRoot '<path-to-LocalBox>'        # auto-set by install.ps1
 Set-LocalLLMSetting Default q36plus
 Set-LocalLLMSetting KeepAlive '5m'
 Set-LocalLLMSetting VRAMGB 32                        # override auto-detect
@@ -648,7 +650,7 @@ setups, so they stay.
   aliases whose Modelfile content hash drifted.
 - **Spectre wizard crashed** → `llmlogerr` for the full trace; set
   `$env:LOCAL_LLM_NO_SPECTRE=1` to use the classic wizard until it's fixed.
-- **`bun` not on PATH** → only required for `-Fc` / Unshackled launches.
+- **`bun` not on PATH** → only required for Unshackled launches.
   Install via `winget install Oven-sh.Bun`.
 
 ---

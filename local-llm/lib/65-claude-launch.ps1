@@ -271,16 +271,21 @@ function Update-Unshackled {
     [CmdletBinding()]
     param()
 
-    $root = $script:Cfg.UnshackledRoot
+    $root = if (Get-Command Resolve-UnshackledRoot -ErrorAction SilentlyContinue) {
+        Resolve-UnshackledRoot
+    } else {
+        $script:Cfg.UnshackledRoot
+    }
+
     if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
         throw "Unshackled is not installed. Run Install-Unshackled first."
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $root '.git'))) {
-        throw "Unshackled root is not a git checkout: $root"
-    }
 
-    & git -C $root pull --ff-only
-    if ($LASTEXITCODE -ne 0) { throw "git pull failed for $root" }
+    $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'Unshackled' -Root $root
+    if ($result.Status -in @('failed', 'not-git', 'no-upstream', 'diverged')) {
+        throw $result.Reason
+    }
+    return $result
 }
 
 function Get-UnshackledExtraArgs {
@@ -335,7 +340,7 @@ function Start-ClaudeWithOllamaModel {
         [Nullable[bool]]$IncludeInlineToolSchemas,
         [switch]$UseQ8,
         [switch]$LimitTools,
-        [Alias("FreeCode", "Fc")][switch]$Unshackled,
+        [switch]$Unshackled,
         [switch]$SkipToolCheck,
         [string[]]$ExtraUnshackledArgs
     )
@@ -486,7 +491,7 @@ function Start-ClaudeWithLlamaCppModel {
         [string]$Tools,
         [Nullable[bool]]$IncludeInlineToolSchemas,
         [switch]$LimitTools,
-        [Alias("FreeCode", "Fc")][switch]$Unshackled,
+        [switch]$Unshackled,
         [switch]$Strict,
         [switch]$AutoBest,
         [switch]$AutoBestStrict,

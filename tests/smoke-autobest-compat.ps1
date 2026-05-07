@@ -36,7 +36,7 @@ try {
         Def = $def
         ContextKey = 'fast'
         Mode = 'native'
-        ModelArgPath = 'D:\fixture\model.gguf'
+        ModelArgPath = (Join-Path $env:TEMP 'fixture\model.gguf')
         Port = 18080
     }
     foreach ($k in $entry.overrides.Keys) {

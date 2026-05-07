@@ -2,6 +2,14 @@
 
 Past-tense record of shipped changes.
 
+## 2026-05-07 - Suite updater, Unshackled cleanup
+
+### Added
+
+- **`llm-update` / `Update-LocalLLMSuite`.** Checks LocalBox, Unshackled, and BenchPilot when they are installed as git checkouts, fetches upstream state, and fast-forwards only when an update is available. Missing companions are skipped, current checkouts are reported as current, and diverged/no-upstream checkouts are left untouched with a reason.
+- **`LocalBoxRoot` setting.** `install.ps1` now records the source checkout used for installation so deployed copy-mode profiles can find the LocalBox repo for future self-updates.
+- **Unshackled-only command surface.** Removed the old shorthand and pre-rename aliases. Model launches now use the explicit `-Unshackled` switch, and the default shortcut is `llmdefaultunshackled`.
+
 ## 2026-05-03 — Wizard back-step nav, full-quant backfill, install fix
 
 ### Added
@@ -63,17 +71,17 @@ The catalog gained one realistic 256k coder option (`qcoder30 -Ctx 256 -Quant iq
 
 ### Why
 
-Cloning the public repo onto a different machine should not require editing `llm-models.json` to fix `UnshackledRoot` (and risking merge conflicts with future pulls). And `-Fc` should do the obvious thing on a fresh machine instead of failing because no Unshackled is around.
+Cloning the public repo onto a different machine should not require editing `llm-models.json` to fix `UnshackledRoot` (and risking merge conflicts with future pulls). Unshackled launches should do the obvious thing on a fresh machine instead of failing because no checkout is around.
 
 ## 2026-04-30 — Unshackled rename
 
-The `free-code` fork was renamed to [Unshackled](https://github.com/David-c0degeek/unshackled). Propagated through this project:
+The external harness fork was renamed to [Unshackled](https://github.com/David-c0degeek/unshackled). Propagated through this project:
 
-- JSON config field `FreeCodeRoot` → `UnshackledRoot`. Old configs are migrated on read (the field is renamed in memory; saved configs use the new name).
-- Internal function `Invoke-FreeCodeCli` → `Invoke-UnshackledCli`.
-- Switch parameter `-FreeCode` → `-Unshackled` on `Start-ClaudeWithOllamaModel`, `Invoke-ModelShortcut`, and the per-model shortcut functions. `-FreeCode` and `-Fc` remain as aliases — muscle memory like `q27 -Fc` is unchanged.
+- JSON config field renamed to `UnshackledRoot`.
+- Internal CLI wrapper renamed to `Invoke-UnshackledCli`.
+- Switch parameter renamed to `-Unshackled` on `Start-ClaudeWithOllamaModel`, `Invoke-ModelShortcut`, and the per-model shortcut functions.
 - User-visible labels updated: launcher banner, wizard action label, install diagnostics, README, quick reference (`llmdocs`).
-- Local folder path (`D:\repos\free-code`) was not renamed and still works as the configured `UnshackledRoot`.
+- Existing local folder paths were not renamed and still work as the configured `UnshackledRoot`.
 
 ## 2026-04-29 — second-pass refactor
 
@@ -83,7 +91,7 @@ Reviewed the project, then ran a single-day refactor pass guided by an explicit 
 
 - **Persona pollution.** `LocalLLMProfile.ps1` had a hardcoded "You are Qwen, created by Alibaba Cloud" prepended to every model launch — wrong for Devstral and even somewhat wrong for the Qwen variants whose GGUF templates already self-identify. Removed the persona layer entirely; the system prompt now contains only universal tool-use rules, plus an opt-in deferred-tool-schema block (gated on `LimitTools`).
 - **`enforcer-claude.ps1` rewritten.** The wrapper used to hardcode `qcoder30` and bypass the no-think proxy by pointing at `localhost:11434`. Now it reads `Default` from `llm-models.json` (or `$env:ENFORCER_MODEL`), routes through the proxy on `11435`, self-starts the proxy if needed, and sets the same thinking/caching/attribution env stack as the main launcher.
-- **`claudefc` stub deleted.** It was a one-liner that called `Invoke-FreeCodeCli` with no args and ignored everything. The `<alias>fc` shortcuts already covered free-code launches; the new flag-based `-Fc` covers it now.
+- **Legacy harness stub deleted.** It was a one-liner that called the old harness wrapper with no args and ignored everything. The flag-based Unshackled launch path covers it now.
 - **Tool-support detection rewritten.** `Test-OllamaModelSupportsTools` used to grep `ollama show` text for the literal word "tools" — which could match unrelated lines. Now POSTs to `/api/show` and checks the structured `capabilities` array. Falls back to the regex if the API is unreachable.
 - **Devstral parser confirmed correct.** `Parser: "none"` was the right call (its GGUF self-templates with persona, `[SYSTEM_PROMPT]`/`[TOOL_CALLS]` tags, and `capabilities=[completion,vision,tools]`). Documented inline via a `ParserNote` field.
 - **`init -Stale` parameter shadow bug.** `Initialize-LocalLLM` declared `[switch]$Stale`; the body did `$stale = @(Get-StaleModelAliases)`. PowerShell variables are case-insensitive, so the assignment tried to coerce an array into a `SwitchParameter` and failed silently, leaving `$stale` as the boolean `$true`. Renamed the local to `$staleEntries`.
@@ -93,7 +101,7 @@ Reviewed the project, then ran a single-day refactor pass guided by an explicit 
 - **Per-model `Tools` allowlist.** `Start-ClaudeWithOllamaModel` now takes `-Tools`; `Invoke-ModelShortcut` reads the optional `Tools` field from the model def, falling back to the global `LocalModelTools`. No models populated yet — capability only.
 - **Auto-generated alias prefixes.** Added `ShortName` field per model. `Register-ModelShortcuts` walked `ShortName × Contexts × actions` and registered PowerShell aliases. Pruned the 30 hand-maintained `CommandAliases` entries to `{}`.
 - **Parser-version stamping.** `New-OllamaModelFromSource` now writes a sha256-hash sidecar at `<profile-root>\parser-versions\<aliasname>.txt`. `Test-ModelAliasFresh`, `Get-StaleModelAliases`, `init -Stale`, and the `info` dashboard surface stale aliases (parser config drifted since build).
-- **Default model.** Added `"Default"` field at the top of `llm-models.json`. `Get-DefaultModelKey` reads it (with a recommended-tier fallback). New shortcuts: `llmdefault`, `llmdefaultfc`, `llmdefaultchat`. Used by the enforcer.
+- **Default model.** Added `"Default"` field at the top of `llm-models.json`. `Get-DefaultModelKey` reads it (with a recommended-tier fallback). New shortcuts: `llmdefault`, an Unshackled default shortcut, and `llmdefaultchat`. Used by the enforcer.
 - **`ThinkingPolicy` per model.** Either `strip` (default) or `keep`. `keep` mode bypasses the no-think proxy, points `ANTHROPIC_BASE_URL` at Ollama directly, and skips the thinking-disable env vars. Set on `q36opus47abl`. Launcher banner shows the active mode.
 - **Configurable `OLLAMA_KEEP_ALIVE`.** Top-level `KeepAlive` field; `Set-OllamaRuntimeEnv` reads it (defaults to `"-1"`).
 - **`Wait-Ollama` resilience.** Deadline bumped 20s → 60s. After 5s of waiting, prints `Waiting for Ollama` and adds a `.` every 2s.
@@ -102,7 +110,7 @@ Reviewed the project, then ran a single-day refactor pass guided by an explicit 
 
 ### Architectural changes
 
-- **Flag-based shortcut scheme (Option C).** Replaced ~135 multi-suffix functions (e.g. `q27hfast`, `qopfastfc`, `setq36piq6kp`) with 9 model functions: `dev`, `qcoder`, `q36`, `q36hau`, `q36p`, `q36h`, `q27`, `q27hau`, `qop`. Each takes `-Ctx`, `-Fc`, `-Chat`, `-Q8`, and (where applicable) `-Quant`. Introduced `Get-ModelShortcutName` and `Unregister-AllModelShortcuts`; `Register-ModelShortcuts` is now idempotent and cleans up old-style functions on reload.
+- **Flag-based shortcut scheme (Option C).** Replaced ~135 multi-suffix functions with 9 model functions: `dev`, `qcoder`, `q36`, `q36hau`, `q36p`, `q36h`, `q27`, `q27hau`, `qop`. Each takes `-Ctx`, `-Unshackled`, `-Chat`, `-Q8`, and (where applicable) `-Quant`. Introduced `Get-ModelShortcutName` and `Unregister-AllModelShortcuts`; `Register-ModelShortcuts` is now idempotent.
 
 ### Deferred
 

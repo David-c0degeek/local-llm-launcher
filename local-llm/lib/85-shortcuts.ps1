@@ -1,6 +1,6 @@
 # Per-model shortcut function generator. For every catalog entry we bind a
 # global function (named after the model's Root or ShortName) that takes
-# -Ctx / -Q8 / -Fc / -Chat / -Strict / -Quant flags and dispatches to
+# -Ctx / -Q8 / -Unshackled / -Chat / -Strict / -Quant flags and dispatches to
 # Invoke-ModelShortcut.
 
 function Invoke-ModelShortcut {
@@ -8,7 +8,7 @@ function Invoke-ModelShortcut {
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [switch]$UseQ8,
-        [Alias("FreeCode", "Fc")][switch]$Unshackled,
+        [switch]$Unshackled,
         [switch]$Chat,
         [switch]$Strict,
         [string[]]$ExtraUnshackledArgs
@@ -116,7 +116,7 @@ function Unregister-AllModelShortcuts {
 
         foreach ($contextKey in $def.Contexts.Keys) {
             $base = Get-ModelAliasName -Def $def -ContextKey $contextKey
-            foreach ($suffix in @("", "fc", "chat", "q8", "q8fc")) {
+            foreach ($suffix in @("", "chat", "q8")) {
                 $names.Add("$base$suffix") | Out-Null
             }
         }
@@ -147,7 +147,7 @@ function Register-ModelShortcuts {
                 param(
                     [string]$Ctx = "",
                     [string]$Quant,
-                    [Alias("Fc", "FreeCode")][switch]$Unshackled,
+                    [switch]$Unshackled,
                     [switch]$Chat,
                     [switch]$Q8,
                     [switch]$Strict
@@ -261,7 +261,7 @@ function llmdefault {
     Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Strict:$Strict
 }
 
-function llmdefaultfc {
+function llmdefaultunshackled {
     [CmdletBinding()]
     param([switch]$Strict)
     Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Unshackled -Strict:$Strict

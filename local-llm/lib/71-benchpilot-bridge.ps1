@@ -341,10 +341,9 @@ function Update-BenchPilot {
     }
 
     $root = $resolved.Root
-    if (-not (Test-Path -LiteralPath (Join-Path $root '.git'))) {
-        throw "BenchPilot root is not a git checkout: $root"
+    $result = Invoke-LocalLLMGitFastForwardUpdate -Name 'BenchPilot' -Root $root
+    if ($result.Status -in @('failed', 'not-git', 'no-upstream', 'diverged')) {
+        throw $result.Reason
     }
-
-    & git -C $root pull --ff-only
-    if ($LASTEXITCODE -ne 0) { throw "git pull failed for $root" }
+    return $result
 }

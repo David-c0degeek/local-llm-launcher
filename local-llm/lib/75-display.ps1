@@ -336,7 +336,7 @@ function Show-ModelDetailSpectre {
         if ([string]::IsNullOrWhiteSpace($_)) { "default" } else { $_ }
     })
     $ctxFlag = if ($contextLabels.Count -gt 1) { "[-Ctx $($contextLabels -join '|')]" } else { '' }
-    $usage = "$cmdName $ctxFlag [-Fc] [-Chat] [-Q8]".Trim()
+    $usage = "$cmdName $ctxFlag [-Unshackled] [-Chat] [-Q8]".Trim()
     if ($def.ContainsKey('Quants')) {
         $usage += " [-Quant $((@($def.Quants.Keys)) -join '|')]"
     }
@@ -396,7 +396,7 @@ function Show-ModelCatalog {
             Write-Host "  $description" -ForegroundColor Gray
         }
 
-        $usage = "$cmdName $ctxFlag [-Fc] [-Chat] [-Q8]".Trim()
+        $usage = "$cmdName $ctxFlag [-Unshackled] [-Chat] [-Q8]".Trim()
 
         if ($def.ContainsKey("Quants")) {
             $quantNames = @($def.Quants.Keys) -join '|'
@@ -689,10 +689,10 @@ function Show-LLMQuickReference {
 
     Write-Host @"
 One function per model — flags select what to do.
-  qcoder -Ctx fast -Fc          Code agent (Qwen3-Coder, 32k, Unshackled)
-  q36p -Ctx fast -Fc            General Qwen 3.6 agent (32k, Unshackled)
+  qcoder -Ctx fast -Unshackled  Code agent (Qwen3-Coder, 32k, Unshackled)
+  q36p -Ctx fast -Unshackled    General Qwen 3.6 agent (32k, Unshackled)
   dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
-  q36p -Ctx 128 -Fc             Big context (Qwen 3.6 Plus, 128k)
+  q36p -Ctx 128 -Unshackled     Big context (Qwen 3.6 Plus, 128k)
   qcoder -Ctx 256 -Quant iq4xs  256k coder context (4090 ceiling — no -Q8)
   q36p -Chat                    Raw ollama chat, no Claude Code
   q36p -Q8                      Use q8 KV cache for higher quality
@@ -702,7 +702,7 @@ One function per model — flags select what to do.
 
 Flags
   -Ctx <name>     One of the model's contexts (e.g. fast, deep, 128, 256). Omit for default.
-  -Fc             Use Unshackled instead of Claude Code (alias for -Unshackled).
+  -Unshackled     Use Unshackled instead of Claude Code.
   -Chat           Run plain ollama chat (skips Claude Code entirely).
   -Q8             Set OLLAMA_KV_CACHE_TYPE=q8_0 for this launch.
                   Refused above $q8MaxLabel tokens — q8 KV at long context OOMs a 24GB card.
@@ -719,6 +719,7 @@ Manage
   info -All             Dashboard with experimental + legacy
   info <key>            Per-model detail: description, quants table (with fit + size), contexts table
   reloadllm             Reload llm-models.json and regenerate commands
+  llm-update            Update LocalBox, Unshackled, and BenchPilot when installed
   ops, qkill, ostop     Ollama: list / stop loaded / restart
   init                  Setup all recommended models
   init -All             Setup every configured model

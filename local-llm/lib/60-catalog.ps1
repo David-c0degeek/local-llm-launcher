@@ -438,7 +438,7 @@ function Get-RegisteredShortcutNamesForModel {
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
 
     $names = New-Object System.Collections.Generic.List[string]
-    $suffixes = @("", "q8", "fc", "q8fc", "chat")
+    $suffixes = @("", "q8", "chat")
 
     foreach ($base in (Get-ModelAliasNames -Def $Def)) {
         foreach ($suffix in $suffixes) {

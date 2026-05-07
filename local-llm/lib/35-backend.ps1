@@ -51,7 +51,7 @@ function Invoke-Backend {
         [string]$KvCacheV,
         [switch]$UseQ8,
         [switch]$LimitTools,
-        [Alias("FreeCode", "Fc")][switch]$Unshackled,
+        [switch]$Unshackled,
         [switch]$Strict,
         [switch]$AutoBest,
         [ValidateSet('short','long')][string]$AutoBestProfile = 'short',

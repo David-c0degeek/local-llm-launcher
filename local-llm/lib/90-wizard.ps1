@@ -193,7 +193,7 @@ function Select-LLMAction {
     $actions = if ($Backend -eq 'llamacpp') {
         @(
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-            [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
             [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
             [pscustomobject]@{ Key = "resetbest"; Label = "Delete best settings"; Description = "Reset saved AutoBest config" },
             [pscustomobject]@{ Key = "setup"; Label = "Download GGUF only"; Description = "Resolve and cache the GGUF without launching" }
@@ -201,7 +201,7 @@ function Select-LLMAction {
     } else {
         @(
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
-            [pscustomobject]@{ Key = "fc"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
             [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" },
             [pscustomobject]@{ Key = "benchmark"; Label = "Benchmark"; Description = "Run ospeed for selected alias" },
             [pscustomobject]@{ Key = "setup"; Label = "Setup/create alias only"; Description = "Download/create selected alias" },
@@ -527,7 +527,7 @@ function Invoke-LlamaCppTunerWizardFlow {
             AutoBest        = $true
             AutoBestProfile = if ($result.PromptLength) { [string]$result.PromptLength } else { 'short' }
         }
-        if ($launchAction -eq 'fc') {
+        if ($launchAction -eq 'unshackled') {
             $launchArgs.Unshackled = $true
         }
 
@@ -629,7 +629,7 @@ function Select-LlamaCppLaunchSettingsMode {
 function Select-LlamaCppPostTuneLaunchAction {
     $items = @(
         [pscustomobject]@{ Key = 'claude'; Label = 'Claude Code'; Description = 'Local model behind Claude Code' },
-        [pscustomobject]@{ Key = 'fc';     Label = 'Unshackled';   Description = 'Local agent via Unshackled' }
+        [pscustomobject]@{ Key = 'unshackled'; Label = 'Unshackled';   Description = 'Local agent via Unshackled' }
     )
 
     $idx = Read-LLMChoiceIndex `
@@ -671,7 +671,7 @@ function Invoke-LLMSelection {
                     -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest
             }
 
-            "fc" {
+            "unshackled" {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
@@ -705,7 +705,7 @@ function Invoke-LLMSelection {
             Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Chat -UseQ8:$UseQ8 -Strict:$Strict
         }
 
-        "fc" {
+        "unshackled" {
             Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8 -Strict:$Strict
         }
 
@@ -820,7 +820,7 @@ function Start-LLMWizardClassic {
                     $step = if ($useStrict) { 'strict' } else { 'context' }
                     break
                 }
-                if ($action -in @("chat", "fc", "claude")) {
+                if ($action -in @("chat", "unshackled", "claude")) {
                     if ($backend -eq 'llamacpp') {
                         $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {
@@ -1000,7 +1000,7 @@ function Select-LLMActionSpectre {
     $labelMap = if ($Backend -eq 'llamacpp') {
         [ordered]@{
             "Claude Code  -  Local model behind Claude Code" = 'claude'
-            "Unshackled   -  Local agent via Unshackled"     = 'fc'
+            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
             "Find best settings - Auto-tune for this machine" = 'findbest'
             "Delete best settings - Reset saved AutoBest config" = 'resetbest'
             "Setup only   -  Download GGUF without launching" = 'setup'
@@ -1009,7 +1009,7 @@ function Select-LLMActionSpectre {
     } else {
         [ordered]@{
             "Claude Code  -  Local model behind Claude Code" = 'claude'
-            "Unshackled   -  Local agent via Unshackled"     = 'fc'
+            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
             "Ollama chat  -  Plain ollama run"               = 'chat'
             "Benchmark    -  Run ospeed for selected alias"  = 'benchmark'
             "Setup only   -  (Re)build alias"                = 'setup'
@@ -1057,7 +1057,7 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
 function Select-LlamaCppPostTuneLaunchActionSpectre {
     $choices = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
-        "Unshackled   -  Local agent via Unshackled"     = 'fc'
+        "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
         "[[Cancel]]"                                    = '__cancel__'
     }
 
@@ -1381,7 +1381,7 @@ function Start-LLMWizardSpectre {
                     $step = if ($useStrict) { 'strict' } else { 'context' }
                     break
                 }
-                if ($action -in @("chat", "fc", "claude")) {
+                if ($action -in @("chat", "unshackled", "claude")) {
                     if ($backend -eq 'llamacpp') {
                         $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {

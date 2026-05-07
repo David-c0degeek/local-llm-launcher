@@ -72,6 +72,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("BenchPilotPreferExternal"))      { $cfg.BenchPilotPreferExternal = $true }
     if (-not $cfg.ContainsKey("BenchPilotAllowLegacyFallback")) { $cfg.BenchPilotAllowLegacyFallback = $true }
     if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
+    if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
 
     # Drop the obsolete docker-image setting if a stale settings.json or
     # catalog still carries it.
@@ -81,12 +82,7 @@ function Import-LocalLLMConfig {
     $cfg.LlamaCppTurboquantRoot = Expand-LocalLLMPath $cfg.LlamaCppTurboquantRoot
     $cfg.LlamaCppGgufRoot       = Expand-LocalLLMPath $cfg.LlamaCppGgufRoot
     $cfg.BenchPilotRoot         = Expand-LocalLLMPath $cfg.BenchPilotRoot
-
-    # Migrate the pre-rename field name (FreeCodeRoot → UnshackledRoot) on read.
-    if ($cfg.Contains("FreeCodeRoot") -and -not $cfg.Contains("UnshackledRoot")) {
-        $cfg.UnshackledRoot = $cfg.FreeCodeRoot
-        $cfg.Remove("FreeCodeRoot") | Out-Null
-    }
+    $cfg.LocalBoxRoot           = Expand-LocalLLMPath $cfg.LocalBoxRoot
 
     $cfg.UnshackledRoot = Expand-LocalLLMPath $cfg.UnshackledRoot
 
