@@ -628,6 +628,16 @@ function Start-ClaudeWithLlamaCppModel {
     $modelArgPath = $ggufPath
 
     $thinkingPolicy = if ($def.Contains('ThinkingPolicy') -and -not [string]::IsNullOrWhiteSpace($def.ThinkingPolicy)) { [string]$def.ThinkingPolicy } else { 'strip' }
+    $agentParallel = if ($script:Cfg.Contains('LlamaCppAgentParallel')) {
+        try { [int]$script:Cfg.LlamaCppAgentParallel } catch { 1 }
+    } else {
+        1
+    }
+    $agentCacheReuse = if ($script:Cfg.Contains('LlamaCppAgentCacheReuse')) {
+        try { [int]$script:Cfg.LlamaCppAgentCacheReuse } catch { 256 }
+    } else {
+        256
+    }
 
     $buildParams = @{
         Def            = $def
@@ -635,10 +645,10 @@ function Start-ClaudeWithLlamaCppModel {
         Mode           = $Mode
         ModelArgPath   = $modelArgPath
         Port           = $port
-        Parallel       = 1
-        CacheReuse     = 256
         ThinkingPolicy = $thinkingPolicy
     }
+    if ($agentParallel -gt 0) { $buildParams.Parallel = $agentParallel }
+    if ($agentCacheReuse -gt 0) { $buildParams.CacheReuse = $agentCacheReuse }
 
     if (-not [string]::IsNullOrWhiteSpace($KvCacheK)) { $buildParams.KvK = $KvCacheK }
     if (-not [string]::IsNullOrWhiteSpace($KvCacheV)) { $buildParams.KvV = $KvCacheV }
@@ -814,7 +824,9 @@ function Start-ClaudeWithLlamaCppModel {
         Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
         Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
         Write-Host "  Port     : $port" -ForegroundColor DarkGray
-        Write-Host "  Agent    : slots=$($buildParams.Parallel) cache-reuse=$($buildParams.CacheReuse)" -ForegroundColor DarkGray
+        $agentSlotsLabel = if ($agentParallel -gt 0) { [string]$agentParallel } else { 'auto' }
+        $agentCacheReuseLabel = if ($agentCacheReuse -gt 0) { [string]$agentCacheReuse } else { 'default' }
+        Write-Host "  Agent    : slots=$agentSlotsLabel cache-reuse=$agentCacheReuseLabel" -ForegroundColor DarkGray
         Write-Host "  Thinking : $thinkingLabel" -ForegroundColor DarkGray
         Write-Host "  Tools    : $toolsLabel" -ForegroundColor DarkGray
         Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray

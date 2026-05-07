@@ -61,10 +61,13 @@ AutoBest launch aborts so a high-throughput profile cannot silently become an
 unusable interactive session.
 
 Claude/Unshackled llama.cpp launches are single-session agent workloads, so the
-launcher also applies `--parallel 1` and `--cache-reuse 256` outside the saved
-tuner override set. This keeps title/smoke/sidebar requests from competing with
-the main agent turn across multiple slots and gives repeated large prompts a
-stable cache path.
+launcher also applies `--parallel 1` and `--cache-reuse 256` by default outside
+the saved tuner override set. This keeps title/smoke/sidebar requests from
+competing with the main agent turn across multiple slots and gives repeated
+large prompts a stable cache path. Override these with
+`Set-LocalLLMSetting LlamaCppAgentParallel <n>` and
+`Set-LocalLLMSetting LlamaCppAgentCacheReuse <n>`; set either value to `0` to
+fall back to llama.cpp defaults for that flag.
 
 The wizard exposes saved selection profiles directly. When both `balanced` and
 `pure` entries exist, launch settings include explicit profile choices in

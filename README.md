@@ -65,8 +65,8 @@ That sounds simple. In practice it isn't:
 - **Agent launches are single-session by default.** llama.cpp can serve
   multiple slots, but Claude/Unshackled side requests compete with the main
   turn when auto-parallelism is left on. LocalBox launches agent sessions with
-  `--parallel 1` and prompt-cache reuse so repeated large prompts stay local to
-  one slot.
+  `--parallel 1` and prompt-cache reuse by default so repeated large prompts
+  stay local to one slot. Both values are configurable in `settings.json`.
 - **Two harnesses, one dispatch path.** Whether you launch Claude Code or
   Unshackled, the same env stack and proxy is set up through the `-Unshackled`
   switch on every model function.
@@ -459,6 +459,8 @@ Set-LocalLLMSetting LlamaCppCoexistOllama $true      # rare: allow both backends
 Set-LocalLLMSetting LlamaCppNCpuMoe 35               # MoE expert CPU offload (default 35; 0 to disable)
 Set-LocalLLMSetting LlamaCppMlock $false             # disable RAM locking (default $true)
 Set-LocalLLMSetting LlamaCppNoMmap $false            # disable no-mmap (default $true)
+Set-LocalLLMSetting LlamaCppAgentParallel 1          # agent slots (default 1; 0 = llama.cpp auto)
+Set-LocalLLMSetting LlamaCppAgentCacheReuse 256      # prompt-cache reuse chunk size (default 256; 0 = llama.cpp default)
 Set-LocalLLMSetting UnshackledRoot $null             # remove an entry
 ```
 

@@ -67,6 +67,8 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppNCpuMoe"))               { $cfg.LlamaCppNCpuMoe = 35 }
     if (-not $cfg.ContainsKey("LlamaCppMlock"))                 { $cfg.LlamaCppMlock = $true }
     if (-not $cfg.ContainsKey("LlamaCppNoMmap"))                { $cfg.LlamaCppNoMmap = $true }
+    if (-not $cfg.ContainsKey("LlamaCppAgentParallel"))         { $cfg.LlamaCppAgentParallel = 1 }
+    if (-not $cfg.ContainsKey("LlamaCppAgentCacheReuse"))       { $cfg.LlamaCppAgentCacheReuse = 256 }
     if (-not $cfg.ContainsKey("BenchPilotRoot"))                { $cfg.BenchPilotRoot = "" }
     if (-not $cfg.ContainsKey("BenchPilotRepoUrl"))             { $cfg.BenchPilotRepoUrl = "https://github.com/David-c0degeek/benchpilot" }
     if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
