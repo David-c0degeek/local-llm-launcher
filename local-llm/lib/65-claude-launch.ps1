@@ -635,6 +635,8 @@ function Start-ClaudeWithLlamaCppModel {
         Mode           = $Mode
         ModelArgPath   = $modelArgPath
         Port           = $port
+        Parallel       = 1
+        CacheReuse     = 256
         ThinkingPolicy = $thinkingPolicy
     }
 
@@ -812,6 +814,7 @@ function Start-ClaudeWithLlamaCppModel {
         Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
         Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
         Write-Host "  Port     : $port" -ForegroundColor DarkGray
+        Write-Host "  Agent    : slots=$($buildParams.Parallel) cache-reuse=$($buildParams.CacheReuse)" -ForegroundColor DarkGray
         Write-Host "  Thinking : $thinkingLabel" -ForegroundColor DarkGray
         Write-Host "  Tools    : $toolsLabel" -ForegroundColor DarkGray
         Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray

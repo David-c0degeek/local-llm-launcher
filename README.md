@@ -62,6 +62,11 @@ That sounds simple. In practice it isn't:
   `num_ctx` into the Modelfile at create time, so `qcoder30` at 32 k and at
   256 k are physically different aliases. The launcher generates and tracks
   them; a sidecar version stamp catches drift when parsers or contexts change.
+- **Agent launches are single-session by default.** llama.cpp can serve
+  multiple slots, but Claude/Unshackled side requests compete with the main
+  turn when auto-parallelism is left on. LocalBox launches agent sessions with
+  `--parallel 1` and prompt-cache reuse so repeated large prompts stay local to
+  one slot.
 - **Two harnesses, one dispatch path.** Whether you launch Claude Code or
   Unshackled, the same env stack and proxy is set up through the `-Unshackled`
   switch on every model function.

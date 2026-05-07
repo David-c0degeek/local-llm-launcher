@@ -38,6 +38,8 @@ try {
         Mode = 'native'
         ModelArgPath = (Join-Path $env:TEMP 'fixture\model.gguf')
         Port = 18080
+        Parallel = 1
+        CacheReuse = 256
     }
     foreach ($k in $entry.overrides.Keys) {
         $argsParams[$k] = $entry.overrides[$k]
@@ -52,6 +54,11 @@ try {
     foreach ($expected in @('--reasoning', 'off', '--reasoning-budget', '0', '--reasoning-format', 'none')) {
         if ($args -notcontains $expected) {
             throw "Build-LlamaServerArgs output did not contain strip-mode reasoning token '$expected'."
+        }
+    }
+    foreach ($expected in @('--parallel', '1', '--cache-reuse', '256')) {
+        if ($args -notcontains $expected) {
+            throw "Build-LlamaServerArgs output did not contain agent-cache token '$expected'."
         }
     }
 

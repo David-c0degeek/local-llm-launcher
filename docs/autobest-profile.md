@@ -60,6 +60,12 @@ direct llama-server route for the same session. If neither route succeeds,
 AutoBest launch aborts so a high-throughput profile cannot silently become an
 unusable interactive session.
 
+Claude/Unshackled llama.cpp launches are single-session agent workloads, so the
+launcher also applies `--parallel 1` and `--cache-reuse 256` outside the saved
+tuner override set. This keeps title/smoke/sidebar requests from competing with
+the main agent turn across multiple slots and gives repeated large prompts a
+stable cache path.
+
 The wizard exposes saved selection profiles directly. When both `balanced` and
 `pure` entries exist, launch settings include explicit profile choices in
 addition to the `auto` preference (`balanced`, then `pure`). Immediate launch

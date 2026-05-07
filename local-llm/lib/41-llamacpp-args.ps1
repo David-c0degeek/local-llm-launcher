@@ -56,6 +56,8 @@ function Build-LlamaServerArgs {
         [Parameter(Mandatory = $true)][ValidateSet('native', 'turboquant')][string]$Mode,
         [Parameter(Mandatory = $true)][string]$ModelArgPath,
         [Parameter(Mandatory = $true)][int]$Port,
+        [int]$Parallel,
+        [int]$CacheReuse,
         [string]$KvK,
         [string]$KvV,
         [int]$NGpuLayers,
@@ -101,6 +103,19 @@ function Build-LlamaServerArgs {
     $argList.Add('127.0.0.1')     | Out-Null
     $argList.Add('--port')        | Out-Null
     $argList.Add([string]$Port)   | Out-Null
+
+    # Agent launches are usually one interactive session, not a shared server.
+    # Keeping a single slot improves cache locality and avoids side requests
+    # competing with the main turn. Cache reuse lets llama-server shift cached
+    # prefixes across repeated Claude/Unshackled prompts.
+    if ($PSBoundParameters.ContainsKey('Parallel') -and $Parallel -gt 0) {
+        $argList.Add('--parallel')     | Out-Null
+        $argList.Add([string]$Parallel) | Out-Null
+    }
+    if ($PSBoundParameters.ContainsKey('CacheReuse') -and $CacheReuse -gt 0) {
+        $argList.Add('--cache-reuse')      | Out-Null
+        $argList.Add([string]$CacheReuse)  | Out-Null
+    }
 
     # GPU layer count: per-call > per-model > default 999 (offload all).
     if (-not $PSBoundParameters.ContainsKey('NGpuLayers') -or $NGpuLayers -le 0) {
