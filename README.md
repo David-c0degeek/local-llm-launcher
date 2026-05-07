@@ -517,7 +517,8 @@ BenchPilot writes a LocalBox-compatible result to
 -AutoBest` replays that saved profile.
 
 ```powershell
-# Tune q36plus at the 256k context preset, native llama.cpp, default budget
+# Tune q36plus at the 256k context preset, native llama.cpp, default budget.
+# Default goal is coding-agent: long-prefill end-to-end latency.
 findbest q36plus -ContextKey 256k
 
 # Quick mode — only baseline + n-cpu-moe + batching (~10 trials)
@@ -526,8 +527,9 @@ findbest q36plus -ContextKey 256k -Quick
 # Deep mode — normal phases, then finer local offload/batch/thread refinement
 findbest q36plus -ContextKey 256k -Deep
 
-# Optimize for prompt-eval (prefill) instead of generation
+# Optimize for prompt-eval (prefill) or generation explicitly
 findbest q36plus -ContextKey 256k -Optimize prompt
+findbest q36plus -ContextKey 256k -Optimize gen
 
 # Allow KV cache variation (default = the model's current single type)
 findbest q36plus -ContextKey 256k -AllowedKvTypes q8_0,f16
@@ -542,9 +544,11 @@ findbest q36plus -ContextKey 256k -PromptLengths short,long
 Show-LlamaCppTunerHistory -Key q36plus -Last 50
 ```
 
-BenchPilot may use fast benchmark probes where supported, but LocalBox treats
-BenchPilot as authoritative and only consumes the exported AutoBest profile.
-Turboquant mode and KV-cache behavior are validated by BenchPilot before export.
+BenchPilot may use fast `llama-bench` probes where supported, but turboquant
+mode uses `llama-server` probes so `turbo3` / `turbo4` are measured through the
+same binary LocalBox will actually launch. Upstream `llama-bench` has KV-cache
+flags (`-ctk` / `-ctv`), but TurboQuant cache types only work in a fork/build
+that registers them; LocalBox's turboquant path uses TheTom's fork.
 
 **What gets searched:**
 
@@ -571,14 +575,20 @@ Turboquant mode and KV-cache behavior are validated by BenchPilot before export.
 9. **verify** — re-runs the final winner through `llama-server` when a coarse
    bench phase was used.
 
+The default `-Optimize coding-agent` score is effective end-to-end throughput
+for a local coding-agent request: large prompt prefill plus a moderate generated
+reply. That prevents decode-only winners with high generation TPS and poor
+prompt-processing TPS from being saved as "best".
+
 OOM/failure is detected from process output; OOM-monotonicity prunes branches
 that are guaranteed to fail. Saved entries include the GPU name and llama.cpp
 build stamp, so `-AutoBest` can warn when a re-tune is advisable after a
 hardware or llama.cpp upgrade. Tuner version changes require a re-tune.
 
 `-PromptLengths short,long` stores separate profile entries. `-AutoBest`
-defaults to the short profile; use `-AutoBestProfile long` to replay the
-long-prefill winner.
+defaults to `auto`: it prefers long/coding-agent profiles, then falls back to
+short profiles when that is all you have. Use `-AutoBestProfile short` or
+`-AutoBestProfile long` to force one profile.
 
 **Replaying the saved best:**
 

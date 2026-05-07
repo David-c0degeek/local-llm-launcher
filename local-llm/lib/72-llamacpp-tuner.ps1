@@ -4,7 +4,7 @@
 # to BenchPilot; this file only keeps the launcher-facing profile I/O and
 # compatibility commands (`findbest`, `tunellm`, history display).
 
-$script:LlamaCppTunerVersion = 3
+$script:LlamaCppTunerVersion = 4
 
 function Get-LlamaCppTunerRoot {
     $root = Join-Path $HOME ".local-llm\tuner"
@@ -160,6 +160,42 @@ function Get-BestLlamaCppConfig {
     }
 
     return $null
+}
+
+function Get-PreferredLlamaCppBestConfig {
+    # For agentic/coding launches, prefer profiles tuned against long prefill
+    # and end-to-end scoring. Fall back to short/generation v4 profiles only
+    # when no better match exists, so existing installs still launch with a
+    # clear warning.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [string]$Quant,
+        [int]$VramGB
+    )
+
+    $candidates = @()
+    foreach ($profile in @('long', 'short')) {
+        $entry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $profile -Quant $Quant -VramGB $VramGB
+        if ($entry) {
+            $unit = [string]$entry.scoreUnit
+            $rank = if ($unit -match '^coding_agent') { 0 }
+                    elseif ($unit -match '^both') { 1 }
+                    elseif ($unit -match '^prompt') { 2 }
+                    elseif ($unit -match '^gen|^tg') { 3 }
+                    else { 4 }
+            $candidates += [pscustomobject]@{
+                Entry = $entry
+                PromptLength = $profile
+                Rank = $rank
+            }
+        }
+    }
+
+    if ($candidates.Count -eq 0) { return $null }
+    return @($candidates | Sort-Object Rank, @{ Expression = { if ($_.PromptLength -eq 'long') { 0 } else { 1 } } } | Select-Object -First 1)[0]
 }
 
 function Get-LlamaCppBestConfigCandidates {
@@ -332,16 +368,21 @@ function Find-BestLlamaCppConfig {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
-        [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 1,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
-        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
+        [ValidateSet('short','long')][string[]]$PromptLengths = @(),
         [switch]$NoSave
     )
+
+    if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
+        $PromptLengths = if ($Optimize -eq 'coding-agent') { @('long') } else { @('short') }
+        $PSBoundParameters['PromptLengths'] = $PromptLengths
+    }
 
     $bpStatus = Test-BenchPilotIntegrationAvailable -Quiet
     if (-not $bpStatus.Available) {
@@ -408,16 +449,20 @@ function findbest {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
-        [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 1,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
-        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
+        [ValidateSet('short','long')][string[]]$PromptLengths = @(),
         [switch]$NoSave
     )
+    if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
+        $PromptLengths = if ($Optimize -eq 'coding-agent') { @('long') } else { @('short') }
+        $PSBoundParameters['PromptLengths'] = $PromptLengths
+    }
     Find-BestLlamaCppConfig @PSBoundParameters
 }
 
@@ -429,15 +474,19 @@ function tunellm {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
-        [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 1,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
-        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
+        [ValidateSet('short','long')][string[]]$PromptLengths = @(),
         [switch]$NoSave
     )
+    if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
+        $PromptLengths = if ($Optimize -eq 'coding-agent') { @('long') } else { @('short') }
+        $PSBoundParameters['PromptLengths'] = $PromptLengths
+    }
     Find-BestLlamaCppConfig @PSBoundParameters
 }

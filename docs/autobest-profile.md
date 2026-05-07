@@ -33,6 +33,10 @@ Entries must include an `overrides` object whose keys can be splatted into
 - `FlashAttn`
 - `SplitMode`
 
+Tuner version 4 is the current launch-time profile generation. It invalidates
+older saved profiles and uses `coding_agent_e2e_tps` by default, so AutoBest
+prefers long-prefill, end-to-end latency over decode-only generation TPS.
+
 BenchPilot-compatible exports add provenance without changing the launch-time
 reader:
 

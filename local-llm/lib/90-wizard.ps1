@@ -393,6 +393,7 @@ function Read-LLMTuneDepth {
 
 function Read-LLMTuneOptimize {
     $items = @(
+        [pscustomobject]@{ Key = 'coding-agent'; Label = 'Coding agent'; Description = 'Long-prompt end-to-end latency for Claude Code/Unshackled' },
         [pscustomobject]@{ Key = 'both';   Label = 'Balanced';   Description = 'Prompt/prefill and generation throughput' },
         [pscustomobject]@{ Key = 'prompt'; Label = 'Prefill';    Description = 'Prioritize first-token latency on large prompts' },
         [pscustomobject]@{ Key = 'gen';    Label = 'Generation'; Description = 'Prioritize tokens/sec after generation starts' }
@@ -585,7 +586,8 @@ function Test-LlamaCppWizardAutoBestAvailable {
     )
 
     try {
-        $entry = Get-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
+        $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
+        $entry = if ($preferred) { $preferred.Entry } else { $null }
         return [bool]($entry -and $entry.overrides)
     }
     catch {
@@ -601,13 +603,20 @@ function Select-LlamaCppLaunchSettingsMode {
     )
 
     $entry = $null
-    try { $entry = Get-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode } catch { $entry = $null }
+    $entryProfile = ''
+    try {
+        $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
+        if ($preferred) {
+            $entry = $preferred.Entry
+            $entryProfile = $preferred.PromptLength
+        }
+    } catch { $entry = $null }
 
     if (-not $entry -or -not $entry.overrides) {
         return 'manual'
     }
 
-    $score = if ($entry.score) { "score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
+    $score = if ($entry.score) { "profile=$entryProfile score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
     $items = @(
         [pscustomobject]@{ Key = 'best';   Label = 'Use best';        Description = "Apply saved AutoBest settings ($score)" },
         [pscustomobject]@{ Key = 'manual'; Label = 'Manual settings'; Description = 'Pick KV cache and launch settings now' }
@@ -1034,13 +1043,20 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
     )
 
     $entry = $null
-    try { $entry = Get-BestLlamaCppConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode } catch { $entry = $null }
+    $entryProfile = ''
+    try {
+        $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
+        if ($preferred) {
+            $entry = $preferred.Entry
+            $entryProfile = $preferred.PromptLength
+        }
+    } catch { $entry = $null }
 
     if (-not $entry -or -not $entry.overrides) {
         return 'manual'
     }
 
-    $score = if ($entry.score) { "score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
+    $score = if ($entry.score) { "profile=$entryProfile score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
     $scoreSafe = ConvertTo-LocalLLMSpectreSafe $score
     $choices = [ordered]@{
         "Use best        -  Apply saved AutoBest settings ($scoreSafe)" = 'best'
@@ -1203,12 +1219,13 @@ function Read-LLMTuneDepthSpectre {
 
 function Read-LLMTuneOptimizeSpectre {
     $choices = [ordered]@{
+        'Coding agent - long-prompt end-to-end latency'                = 'coding-agent'
         'Balanced   - prompt/prefill and generation throughput'       = 'both'
         'Prefill    - prioritize first-token latency on large prompts' = 'prompt'
         'Generation - prioritize tokens/sec after generation starts'   = 'gen'
         '[[Back]]'                                                     = '__back__'
     }
-    $chosen = Read-SpectreSelection -Message "Tune goal" -Choices @($choices.Keys) -PageSize 6
+    $chosen = Read-SpectreSelection -Message "Tune goal" -Choices @($choices.Keys) -PageSize 7
     if ($null -eq $chosen) { return $null }
     if ($chosen -eq '[[Back]]') { return $null }
     return [string]$choices[$chosen]

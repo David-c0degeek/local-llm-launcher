@@ -54,7 +54,7 @@ function Invoke-Backend {
         [switch]$Unshackled,
         [switch]$Strict,
         [switch]$AutoBest,
-        [ValidateSet('short','long')][string]$AutoBestProfile = 'short',
+        [ValidateSet('auto','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs
     )

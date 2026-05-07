@@ -171,20 +171,24 @@ function Invoke-BenchPilotLauncherFindBest {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
-        [ValidateSet('gen','prompt','both')][string]$Optimize = 'gen',
+        [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 1,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
-        [ValidateSet('short','long')][string[]]$PromptLengths = @('short'),
+        [ValidateSet('short','long')][string[]]$PromptLengths = @(),
         [switch]$NoSave
     )
 
     Import-BenchPilotModule | Out-Null
     if (-not (Get-Command Find-BenchPilotBestConfig -ErrorAction SilentlyContinue)) {
         throw "BenchPilot is available, but Find-BenchPilotBestConfig is not implemented by this version."
+    }
+
+    if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
+        $PromptLengths = if ($Optimize -eq 'coding-agent') { @('long') } else { @('short') }
     }
 
     Find-BenchPilotBestConfig `

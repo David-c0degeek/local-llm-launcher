@@ -495,7 +495,7 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$Strict,
         [switch]$AutoBest,
         [switch]$AutoBestStrict,
-        [ValidateSet('short','long')][string]$AutoBestProfile = 'short',
+        [ValidateSet('auto','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs
     )
@@ -555,9 +555,22 @@ function Start-ClaudeWithLlamaCppModel {
     # because they were set before this block — we only fill in keys that
     # haven't already been bound.
     if ($AutoBest) {
-        $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $AutoBestProfile
+        $bestEntry = $null
+        $loadedProfile = $AutoBestProfile
+        if ($AutoBestProfile -eq 'auto') {
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode
+            if ($preferred) {
+                $bestEntry = $preferred.Entry
+                $loadedProfile = $preferred.PromptLength
+            }
+        } else {
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $AutoBestProfile
+        }
         if ($bestEntry -and $bestEntry.overrides) {
-            Write-Host "AutoBest: loaded saved tuner config (score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
+            Write-Host "AutoBest: loaded saved tuner config (profile=$loadedProfile, score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
+            if ([string]$bestEntry.scoreUnit -match '^(gen|tg)_') {
+                Write-Warning "AutoBest: this is a generation-only profile. Re-run: findbest $Key -ContextKey $ContextKey -Mode $Mode"
+            }
             $staleReasons = @(Test-LlamaCppBestConfigStale -Entry $bestEntry -Mode $Mode)
             if ($staleReasons.Count -gt 0) {
                 $msg = "AutoBest: hardware/build changed since last tune - saved config may be stale. Re-run: findbest $Key -ContextKey $ContextKey -Mode $Mode"
@@ -584,14 +597,19 @@ function Start-ClaudeWithLlamaCppModel {
         } else {
             $currentVram = Get-LocalLLMVRAMGB
             $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
-            $candidates = @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $AutoBestProfile -Quant $quant)
+            $profilesToCheck = if ($AutoBestProfile -eq 'auto') { @('long', 'short') } else { @($AutoBestProfile) }
+            $candidates = @()
+            foreach ($profileName in $profilesToCheck) {
+                $candidates += @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $profileName -Quant $quant)
+            }
             foreach ($candidate in $candidates) {
                 if ($candidate.vramGB -and [Math]::Abs([int]$candidate.vramGB - [int]$currentVram) -gt 1) {
                     Write-Warning "AutoBest: saved config VRAM was $($candidate.vramGB)GB, current detected VRAM is ${currentVram}GB."
                     break
                 }
             }
-            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode profile=$AutoBestProfile vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $AutoBestProfile"
+            $profileHint = if ($AutoBestProfile -eq 'auto') { 'long' } else { $AutoBestProfile }
+            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode profile=$AutoBestProfile vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
         }
     }
 
