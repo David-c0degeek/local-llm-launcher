@@ -495,7 +495,7 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$Strict,
         [switch]$AutoBest,
         [switch]$AutoBestStrict,
-        [ValidateSet('auto','short','long')][string]$AutoBestProfile = 'auto',
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
         [string[]]$ExtraUnshackledArgs
     )
@@ -556,15 +556,18 @@ function Start-ClaudeWithLlamaCppModel {
     # haven't already been bound.
     if ($AutoBest) {
         $bestEntry = $null
+        $selectionProfile = if ($AutoBestProfile -in @('pure', 'balanced')) { $AutoBestProfile } else { 'auto' }
+        $promptProfileOverride = if ($AutoBestProfile -in @('short', 'long')) { $AutoBestProfile } else { $null }
         $loadedProfile = $AutoBestProfile
-        if ($AutoBestProfile -eq 'auto') {
-            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode
+        if ($promptProfileOverride) {
+            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfileOverride -Profile pure
+            $loadedProfile = "pure/$promptProfileOverride"
+        } else {
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -Profile $selectionProfile
             if ($preferred) {
                 $bestEntry = $preferred.Entry
-                $loadedProfile = $preferred.PromptLength
+                $loadedProfile = "$($preferred.Profile)/$($preferred.PromptLength)"
             }
-        } else {
-            $bestEntry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $AutoBestProfile
         }
         if ($bestEntry -and $bestEntry.overrides) {
             Write-Host "AutoBest: loaded saved tuner config (profile=$loadedProfile, score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
@@ -597,10 +600,13 @@ function Start-ClaudeWithLlamaCppModel {
         } else {
             $currentVram = Get-LocalLLMVRAMGB
             $quant = if ($def.Contains('Quant')) { [string]$def.Quant } else { '' }
-            $profilesToCheck = if ($AutoBestProfile -eq 'auto') { @('long', 'short') } else { @($AutoBestProfile) }
+            $profilesToCheck = if ($promptProfileOverride) { @($promptProfileOverride) } else { @('long', 'short') }
+            $selectionProfilesToCheck = if ($selectionProfile -eq 'auto') { @('balanced', 'pure') } else { @($selectionProfile) }
             $candidates = @()
-            foreach ($profileName in $profilesToCheck) {
-                $candidates += @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $profileName -Quant $quant)
+            foreach ($selectionName in $selectionProfilesToCheck) {
+                foreach ($profileName in $profilesToCheck) {
+                    $candidates += @(Get-LlamaCppBestConfigCandidates -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $profileName -Quant $quant -Profile $selectionName)
+                }
             }
             foreach ($candidate in $candidates) {
                 if ($candidate.vramGB -and [Math]::Abs([int]$candidate.vramGB - [int]$currentVram) -gt 1) {
@@ -608,8 +614,8 @@ function Start-ClaudeWithLlamaCppModel {
                     break
                 }
             }
-            $profileHint = if ($AutoBestProfile -eq 'auto') { 'long' } else { $AutoBestProfile }
-            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode profile=$AutoBestProfile vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
+            $profileHint = if ($promptProfileOverride) { $promptProfileOverride } else { 'long' }
+            Write-Warning "AutoBest: no saved config matches (key=$Key contextKey=$ContextKey mode=$Mode autoBestProfile=$AutoBestProfile vram=${currentVram}GB). Run: findbest $Key -ContextKey $ContextKey -Mode $Mode -PromptLengths $profileHint"
         }
     }
 

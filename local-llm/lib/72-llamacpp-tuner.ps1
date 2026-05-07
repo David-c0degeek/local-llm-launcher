@@ -86,7 +86,13 @@ function Save-LlamaCppBestConfig {
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$BestOverrides,
         [Parameter(Mandatory = $true)][double]$Score,
         [string]$ScoreUnit = 'tg_tps_median',
-        [int]$TrialCount = 0
+        [int]$TrialCount = 0,
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure',
+        [ValidateSet('greedy','beam')][string]$SearchStrategy = 'greedy',
+        [int]$BeamWidth = 1,
+        [double]$PureScore = 0.0,
+        [System.Collections.IDictionary]$Telemetry = @{},
+        [System.Collections.IDictionary]$ScoreBreakdown = @{}
     )
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
@@ -106,11 +112,13 @@ function Save-LlamaCppBestConfig {
 
     $entries = @($existing.entries | Where-Object {
         $entryPromptLength = if ($_['prompt_length']) { [string]$_['prompt_length'] } else { 'short' }
+        $entryProfile = if ($_['profile']) { [string]$_['profile'] } else { 'pure' }
         $_.quant -ne $Quant -or
         $_.contextKey -ne $ContextKey -or
         $_.mode -ne $Mode -or
         [int]$_.vramGB -ne $VramGB -or
-        $entryPromptLength -ne $PromptLength
+        $entryPromptLength -ne $PromptLength -or
+        $entryProfile -ne $Profile
     })
 
     $newEntry = [ordered]@{
@@ -119,10 +127,16 @@ function Save-LlamaCppBestConfig {
         mode          = $Mode
         vramGB        = $VramGB
         prompt_length = $PromptLength
+        profile       = $Profile
+        searchStrategy = $SearchStrategy
+        beamWidth     = $BeamWidth
         score         = [math]::Round($Score, 2)
         scoreUnit     = $ScoreUnit
+        pureScore     = [math]::Round($(if ($PureScore -gt 0) { $PureScore } else { $Score }), 2)
         args          = @($BestArgs)
         overrides     = $BestOverrides
+        telemetry     = $Telemetry
+        scoreBreakdown = $ScoreBreakdown
         measured_at   = (Get-Date).ToString('o')
         tuner_version = $script:LlamaCppTunerVersion
         trial_count   = $TrialCount
@@ -154,7 +168,8 @@ function Get-BestLlamaCppConfig {
         [Parameter(Mandatory = $true)][string]$Mode,
         [ValidateSet('short','long')][string]$PromptLength = 'short',
         [string]$Quant,
-        [int]$VramGB
+        [int]$VramGB,
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
     )
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
@@ -181,6 +196,8 @@ function Get-BestLlamaCppConfig {
         if ($entry.mode       -ne $Mode)       { continue }
         $entryPromptLength = if ($entry.prompt_length) { [string]$entry.prompt_length } else { 'short' }
         if ($entryPromptLength -ne $PromptLength) { continue }
+        $entryProfile = if ($entry.profile) { [string]$entry.profile } else { 'pure' }
+        if ($entryProfile -ne $Profile) { continue }
         if ($Quant -and $entry.quant -ne $Quant) { continue }
         $delta = [Math]::Abs([int]$entry.vramGB - [int]$VramGB)
         if ($delta -gt 1) { continue }
@@ -202,29 +219,36 @@ function Get-PreferredLlamaCppBestConfig {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Mode,
         [string]$Quant,
-        [int]$VramGB
+        [int]$VramGB,
+        [ValidateSet('auto','pure','balanced')][string]$Profile = 'auto'
     )
 
     $candidates = @()
-    foreach ($profile in @('long', 'short')) {
-        $entry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $profile -Quant $Quant -VramGB $VramGB
-        if ($entry) {
-            $unit = [string]$entry.scoreUnit
-            $rank = if ($unit -match '^coding_agent') { 0 }
-                    elseif ($unit -match '^both') { 1 }
-                    elseif ($unit -match '^prompt') { 2 }
-                    elseif ($unit -match '^gen|^tg') { 3 }
-                    else { 4 }
-            $candidates += [pscustomobject]@{
-                Entry = $entry
-                PromptLength = $profile
-                Rank = $rank
+    $selectionProfiles = if ($Profile -eq 'auto') { @('balanced', 'pure') } else { @($Profile) }
+    foreach ($selectionProfile in $selectionProfiles) {
+        foreach ($promptProfile in @('long', 'short')) {
+            $entry = Get-BestLlamaCppConfig -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $promptProfile -Quant $Quant -VramGB $VramGB -Profile $selectionProfile
+            if ($entry) {
+                $unit = [string]$entry.scoreUnit
+                $rank = if ($selectionProfile -eq 'balanced') { 0 } else { 1 }
+                $unitRank = if ($unit -match 'coding_agent') { 0 }
+                            elseif ($unit -match '^both') { 1 }
+                            elseif ($unit -match '^prompt') { 2 }
+                            elseif ($unit -match '^gen|^tg') { 3 }
+                            else { 4 }
+                $candidates += [pscustomobject]@{
+                    Entry = $entry
+                    PromptLength = $promptProfile
+                    Profile = $selectionProfile
+                    Rank = $rank
+                    UnitRank = $unitRank
+                }
             }
         }
     }
 
     if ($candidates.Count -eq 0) { return $null }
-    return @($candidates | Sort-Object Rank, @{ Expression = { if ($_.PromptLength -eq 'long') { 0 } else { 1 } } } | Select-Object -First 1)[0]
+    return @($candidates | Sort-Object Rank, UnitRank, @{ Expression = { if ($_.PromptLength -eq 'long') { 0 } else { 1 } } } | Select-Object -First 1)[0]
 }
 
 function Get-LlamaCppBestConfigCandidates {
@@ -234,7 +258,8 @@ function Get-LlamaCppBestConfigCandidates {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Mode,
         [ValidateSet('short','long')][string]$PromptLength = 'short',
-        [string]$Quant
+        [string]$Quant,
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
     )
 
     $path = Get-LlamaCppTunerBestFile -Key $Key
@@ -248,6 +273,7 @@ function Get-LlamaCppBestConfigCandidates {
         $_.contextKey -eq $ContextKey -and
         $_.mode -eq $Mode -and
         ($(if ($_.prompt_length) { [string]$_.prompt_length } else { 'short' }) -eq $PromptLength) -and
+        ($(if ($_.profile) { [string]$_.profile } else { 'pure' }) -eq $Profile) -and
         ([string]::IsNullOrWhiteSpace($Quant) -or $_.quant -eq $Quant)
     })
 }
@@ -384,7 +410,13 @@ function Save-BestLlamaCppConfig {
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$BestOverrides,
         [Parameter(Mandatory = $true)][double]$Score,
         [string]$ScoreUnit = 'tg_tps_median',
-        [int]$TrialCount = 0
+        [int]$TrialCount = 0,
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure',
+        [ValidateSet('greedy','beam')][string]$SearchStrategy = 'greedy',
+        [int]$BeamWidth = 1,
+        [double]$PureScore = 0.0,
+        [System.Collections.IDictionary]$Telemetry = @{},
+        [System.Collections.IDictionary]$ScoreBreakdown = @{}
     )
     return Save-LlamaCppBestConfig @PSBoundParameters
 }
@@ -405,6 +437,9 @@ function Find-BestLlamaCppConfig {
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
         [ValidateSet('short','long')][string[]]$PromptLengths = @(),
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('greedy','beam')][string]$SearchStrategy,
+        [int]$BeamWidth = 1,
         [switch]$NoSave
     )
 
@@ -486,6 +521,9 @@ function findbest {
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
         [ValidateSet('short','long')][string[]]$PromptLengths = @(),
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('greedy','beam')][string]$SearchStrategy,
+        [int]$BeamWidth = 1,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
@@ -511,6 +549,9 @@ function tunellm {
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
         [ValidateSet('short','long')][string[]]$PromptLengths = @(),
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('greedy','beam')][string]$SearchStrategy,
+        [int]$BeamWidth = 1,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {

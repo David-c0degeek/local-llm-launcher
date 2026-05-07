@@ -179,6 +179,9 @@ function Invoke-BenchPilotLauncherFindBest {
         [switch]$AggressiveKv,
         [switch]$AllowKvQualityRegression,
         [ValidateSet('short','long')][string[]]$PromptLengths = @(),
+        [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
+        [ValidateSet('greedy','beam')][string]$SearchStrategy,
+        [int]$BeamWidth = 1,
         [switch]$NoSave
     )
 
@@ -191,24 +194,34 @@ function Invoke-BenchPilotLauncherFindBest {
         $PromptLengths = if ($Optimize -eq 'coding-agent') { @('long') } else { @('short') }
     }
 
-    Find-BenchPilotBestConfig `
-        -Target LocalBox `
-        -Runtime llamacpp `
-        -Key $Key `
-        -ContextKey $ContextKey `
-        -Mode $Mode `
-        -PromptLengths $PromptLengths `
-        -AllowedKvTypes $AllowedKvTypes `
-        -Optimize $Optimize `
-        -Budget $Budget `
-        -Runs $Runs `
-        -Quick:$Quick `
-        -Deep:$Deep `
-        -Aggressive:$Aggressive `
-        -AggressiveKv:$AggressiveKv `
-        -AllowKvQualityRegression:$AllowKvQualityRegression `
-        -NoSave:$NoSave `
-        -LauncherRoot $script:LLMProfileRoot
+    $params = @{
+        Target = 'LocalBox'
+        Runtime = 'llamacpp'
+        Key = $Key
+        ContextKey = $ContextKey
+        Mode = $Mode
+        PromptLengths = $PromptLengths
+        AllowedKvTypes = $AllowedKvTypes
+        Optimize = $Optimize
+        Budget = $Budget
+        Runs = $Runs
+        Quick = $Quick
+        Deep = $Deep
+        Aggressive = $Aggressive
+        AggressiveKv = $AggressiveKv
+        AllowKvQualityRegression = $AllowKvQualityRegression
+        Profile = $Profile
+        NoSave = $NoSave
+        LauncherRoot = $script:LLMProfileRoot
+    }
+    if ($PSBoundParameters.ContainsKey('SearchStrategy') -and -not [string]::IsNullOrWhiteSpace($SearchStrategy)) {
+        $params.SearchStrategy = $SearchStrategy
+    }
+    if ($PSBoundParameters.ContainsKey('BeamWidth')) {
+        $params.BeamWidth = $BeamWidth
+    }
+
+    Find-BenchPilotBestConfig @params
 }
 
 function Get-BenchPilotLauncherBestConfig {
@@ -218,7 +231,8 @@ function Get-BenchPilotLauncherBestConfig {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Mode,
         [ValidateSet('short','long')][string]$PromptLength = 'short',
-        [string]$Quant
+        [string]$Quant,
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
     )
 
     Import-BenchPilotModule | Out-Null
@@ -226,7 +240,7 @@ function Get-BenchPilotLauncherBestConfig {
         throw "BenchPilot is available, but Get-BenchPilotBestConfig is not implemented by this version."
     }
 
-    Get-BenchPilotBestConfig -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant
+    Get-BenchPilotBestConfig -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
 }
 
 function Get-BenchPilotLauncherBestConfigCandidates {
@@ -236,7 +250,8 @@ function Get-BenchPilotLauncherBestConfigCandidates {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
         [Parameter(Mandatory = $true)][string]$Mode,
         [ValidateSet('short','long')][string]$PromptLength = 'short',
-        [string]$Quant
+        [string]$Quant,
+        [ValidateSet('pure','balanced')][string]$Profile = 'pure'
     )
 
     Import-BenchPilotModule | Out-Null
@@ -244,7 +259,7 @@ function Get-BenchPilotLauncherBestConfigCandidates {
         throw "BenchPilot is available, but Get-BenchPilotBestConfigCandidates is not implemented by this version."
     }
 
-    Get-BenchPilotBestConfigCandidates -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant
+    Get-BenchPilotBestConfigCandidates -Target LocalBox -Runtime llamacpp -Key $Key -ContextKey $ContextKey -Mode $Mode -PromptLength $PromptLength -Quant $Quant -Profile $Profile
 }
 
 function Show-BenchPilotLauncherHistory {
