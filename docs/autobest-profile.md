@@ -52,11 +52,13 @@ a small Anthropic-compatible `/v1/messages` launch smoke request before handing
 the session to Claude or Unshackled. The smoke includes the real launch system
 prompt and must produce the requested visible answer; output inside
 `<think>...</think>` is ignored for this check. For strip-mode models this first
-uses the no-think proxy, matching the normal launch route. If that proxy route
-does not produce the requested visible answer, LocalBox tries the direct
-llama-server route for the same session. If neither route succeeds, AutoBest
-launch aborts so a high-throughput profile cannot silently become an unusable
-interactive session.
+uses the no-think proxy, matching the normal launch route. llama.cpp strip-mode
+launches also disable reasoning generation with `--reasoning off` and
+`--reasoning-budget 0`; the proxy remains as a defensive cleaner for any leaked
+tags. If that proxy route does not produce the requested visible answer,
+LocalBox tries the direct llama-server route for the same session. If neither
+route succeeds, AutoBest launch aborts so a high-throughput profile cannot
+silently become an unusable interactive session.
 
 The wizard exposes saved selection profiles directly. When both `balanced` and
 `pure` entries exist, launch settings include explicit profile choices in

@@ -49,6 +49,11 @@ try {
             throw "Build-LlamaServerArgs output did not contain expected token '$expected'."
         }
     }
+    foreach ($expected in @('--reasoning', 'off', '--reasoning-budget', '0', '--reasoning-format', 'none')) {
+        if ($args -notcontains $expected) {
+            throw "Build-LlamaServerArgs output did not contain strip-mode reasoning token '$expected'."
+        }
+    }
 
     [pscustomobject]@{
         LoadedSource = $entry.source

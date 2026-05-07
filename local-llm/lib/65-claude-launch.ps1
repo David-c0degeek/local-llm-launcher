@@ -734,6 +734,7 @@ function Start-ClaudeWithLlamaCppModel {
 
     Save-ClaudeEnvBackup
 
+    try {
     # Front llama-server with no-think-proxy unless the model opts to keep
     # thinking. The proxy strips <think>...</think> from /v1/messages
     # responses, which both reasoning-Qwen variants and Heretic merges leak
@@ -768,7 +769,6 @@ function Start-ClaudeWithLlamaCppModel {
         }
     }
 
-    try {
         Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep')
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }

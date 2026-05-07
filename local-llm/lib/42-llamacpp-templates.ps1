@@ -35,8 +35,9 @@ function Resolve-LlamaCppChatTemplate {
 
 function Get-LlamaCppReasoningArgs {
     # Maps the catalog ThinkingPolicy + parser to llama-server reasoning flags.
-    # llama-server emits structured reasoning when --reasoning-format is set;
-    # `none` keeps the wire format clean, `deepseek` lets thinking blocks pass.
+    # `strip` must disable reasoning generation, not just hide it on the wire:
+    # otherwise Qwen thinking templates can spend minutes generating invisible
+    # <think> tokens before producing a user-visible answer.
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ThinkingPolicy,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Parser
@@ -45,10 +46,14 @@ function Get-LlamaCppReasoningArgs {
     $policy = if ([string]::IsNullOrWhiteSpace($ThinkingPolicy)) { 'strip' } else { $ThinkingPolicy }
 
     if ($policy -eq 'keep') {
-        return @('--reasoning-format', 'deepseek')
+        return @('--reasoning', 'on', '--reasoning-format', 'deepseek')
     }
 
-    return @('--reasoning-format', 'none')
+    return @(
+        '--reasoning', 'off',
+        '--reasoning-budget', '0',
+        '--reasoning-format', 'none'
+    )
 }
 
 function ConvertFrom-OllamaParameter {

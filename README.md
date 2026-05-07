@@ -50,7 +50,10 @@ That sounds simple. In practice it isn't:
 - **Anthropic's wire format carries `thinking` / `reasoning` blocks** that
   Ollama's `/v1/messages` endpoint can't ingest. The launcher routes traffic
   through a small Python proxy (`no-think-proxy.py`) that strips them on the
-  way in. Thinking-trained models (`ThinkingPolicy: keep`) bypass the proxy.
+  way in. For llama.cpp strip-mode launches it also passes `--reasoning off`
+  and `--reasoning-budget 0` so hidden thinking tokens are not generated in the
+  first place. Thinking-trained models (`ThinkingPolicy: keep`) bypass the
+  proxy.
 - **VRAM math is non-trivial.** Q8 KV at 256 k tokens OOMs a 4090. Q4_K_M
   weights leave room for KV but lose precision on coding. The launcher tags
   every quant with `[fits] / [tight] / [over]` against your actual card and
