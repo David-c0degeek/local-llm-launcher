@@ -587,13 +587,23 @@ function Invoke-LlamaCppTunerWizardFlow {
             Select-LlamaCppPostTuneLaunchAction
         }
         if ([string]::IsNullOrWhiteSpace($launchAction)) { return }
+        $launchProfile = if ($selectionProfile -eq 'pure') {
+            'pure'
+        } elseif ($selectionProfile -eq 'balanced') {
+            'balanced'
+        } elseif ($UseSpectrePrompts) {
+            Select-LlamaCppPostTuneProfileSpectre -Results $results
+        } else {
+            Select-LlamaCppPostTuneProfile -Results $results
+        }
+        if ([string]::IsNullOrWhiteSpace($launchProfile)) { return }
 
         $launchArgs = @{
             Key             = $ModelKey
             ContextKey      = $ContextKey
             Mode            = $Mode
             AutoBest        = $true
-            AutoBestProfile = if ($selectionProfile -eq 'pure') { 'pure' } elseif ($selectionProfile -eq 'balanced') { 'balanced' } else { 'auto' }
+            AutoBestProfile = $launchProfile
         }
         if ($launchAction -eq 'unshackled') {
             $launchArgs.Unshackled = $true
@@ -662,6 +672,43 @@ function Test-LlamaCppWizardAutoBestAvailable {
     }
 }
 
+function Get-LlamaCppWizardAutoBestChoices {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelKey,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
+        [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
+    )
+
+    $choices = New-Object System.Collections.Generic.List[object]
+    foreach ($profileName in @('balanced', 'pure')) {
+        try {
+            $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode -Profile $profileName
+            if (-not $preferred -or -not $preferred.Entry -or -not $preferred.Entry.overrides) { continue }
+            $entry = $preferred.Entry
+            $score = if ($entry.score) {
+                "profile=$profileName/$($preferred.PromptLength) score=$($entry.score) $($entry.scoreUnit)"
+            } else {
+                "profile=$profileName/$($preferred.PromptLength)"
+            }
+            $label = if ($profileName -eq 'balanced') { 'Use balanced' } else { 'Use pure' }
+            $description = if ($profileName -eq 'balanced') {
+                "Apply saved balanced AutoBest settings ($score)"
+            } else {
+                "Apply saved pure AutoBest settings ($score)"
+            }
+            $choices.Add([pscustomobject]@{
+                Key = "best:$profileName"
+                Label = $label
+                Description = $description
+                Profile = $profileName
+            }) | Out-Null
+        }
+        catch {}
+    }
+
+    return @($choices)
+}
+
 function Select-LlamaCppLaunchSettingsMode {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -669,25 +716,16 @@ function Select-LlamaCppLaunchSettingsMode {
         [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
     )
 
-    $entry = $null
-    $entryProfile = ''
-    try {
-        $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
-        if ($preferred) {
-            $entry = $preferred.Entry
-            $entryProfile = $preferred.PromptLength
-        }
-    } catch { $entry = $null }
-
-    if (-not $entry -or -not $entry.overrides) {
+    $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode)
+    if ($bestChoices.Count -eq 0) {
         return 'manual'
     }
 
-    $score = if ($entry.score) { "profile=$entryProfile score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
-    $items = @(
-        [pscustomobject]@{ Key = 'best';   Label = 'Use best';        Description = "Apply saved AutoBest settings ($score)" },
-        [pscustomobject]@{ Key = 'manual'; Label = 'Manual settings'; Description = 'Pick KV cache and launch settings now' }
-    )
+    $items = @($bestChoices)
+    if ($bestChoices.Count -gt 1) {
+        $items += [pscustomobject]@{ Key = 'best:auto'; Label = 'Use AutoBest'; Description = 'Prefer balanced, then pure automatically'; Profile = 'auto' }
+    }
+    $items += [pscustomobject]@{ Key = 'manual'; Label = 'Manual settings'; Description = 'Pick KV cache and launch settings now'; Profile = '' }
 
     $idx = Read-LLMChoiceIndex `
         -Title "Launch settings" `
@@ -721,6 +759,34 @@ function Select-LlamaCppPostTuneLaunchAction {
     return [string]$items[$idx].Key
 }
 
+function Select-LlamaCppPostTuneProfile {
+    param([Parameter(Mandatory = $true)][object[]]$Results)
+
+    $items = @($Results | Where-Object { $_ } | ForEach-Object {
+        $profileName = if ($_.Profile) { [string]$_.Profile } else { 'pure' }
+        [pscustomobject]@{
+            Key = $profileName
+            Label = if ($profileName -eq 'balanced') { 'Balanced' } else { 'Pure' }
+            Description = "score=$($_.Score) $($_.ScoreUnit)"
+        }
+    })
+    if ($items.Count -le 1) {
+        return $(if ($items.Count -eq 1) { [string]$items[0].Key } else { 'auto' })
+    }
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Launch profile" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
+
+    if ($idx -lt 0) { return $null }
+    return [string]$items[$idx].Key
+}
+
 function Invoke-LLMSelection {
     param(
         [Parameter(Mandatory = $true)][string]$ModelKey,
@@ -733,6 +799,7 @@ function Invoke-LLMSelection {
         [switch]$UseQ8,
         [switch]$Strict,
         [switch]$UseAutoBest,
+        [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [switch]$UseSpectrePrompts
     )
 
@@ -744,14 +811,14 @@ function Invoke-LLMSelection {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest
+                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
             }
 
             "unshackled" {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -AutoBest:$UseAutoBest
+                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
             }
 
             "setup" {
@@ -821,6 +888,7 @@ function Start-LLMWizardClassic {
     $kvK          = $null
     $kvV          = $null
     $useAutoBest  = $false
+    $autoBestProfile = 'auto'
     $step         = 'model'
 
     while ($true) {
@@ -835,6 +903,7 @@ function Start-LLMWizardClassic {
 
                 $useStrict = $false
                 $useAutoBest = $false
+                $autoBestProfile = 'auto'
                 $step = 'quant'
             }
 
@@ -904,6 +973,7 @@ function Start-LLMWizardClassic {
                     }
                 } else {
                     $useAutoBest = $false
+                    $autoBestProfile = 'auto'
                     $step = 'launch'
                 }
             }
@@ -911,15 +981,18 @@ function Start-LLMWizardClassic {
             'llamacppsettings' {
                 $modeChoice = Select-LlamaCppLaunchSettingsMode -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode
                 if ($null -eq $modeChoice) { $step = 'action'; break }
-                if ($modeChoice -eq 'best') {
+                if ($modeChoice -like 'best:*') {
                     $kvK = $null
                     $kvV = $null
                     $useAutoBest = $true
+                    $autoBestProfile = [string]($modeChoice -replace '^best:', '')
+                    if ([string]::IsNullOrWhiteSpace($autoBestProfile)) { $autoBestProfile = 'auto' }
                     $step = 'launch'
                     break
                 }
 
                 $useAutoBest = $false
+                $autoBestProfile = 'auto'
                 $step = 'kvcache'
             }
 
@@ -936,6 +1009,7 @@ function Start-LLMWizardClassic {
                 $kvK = $picked.K
                 $kvV = $picked.V
                 $useAutoBest = $false
+                $autoBestProfile = 'auto'
                 $step = 'launch'
             }
 
@@ -943,7 +1017,7 @@ function Start-LLMWizardClassic {
                 try {
                     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
                         -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
                 }
                 catch {
                     Write-Host "Command failed." -ForegroundColor Red
@@ -1109,27 +1183,21 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
         [Parameter(Mandatory = $true)][ValidateSet('native','turboquant')][string]$Mode
     )
 
-    $entry = $null
-    $entryProfile = ''
-    try {
-        $preferred = Get-PreferredLlamaCppBestConfig -Key $ModelKey -ContextKey $ContextKey -Mode $Mode
-        if ($preferred) {
-            $entry = $preferred.Entry
-            $entryProfile = $preferred.PromptLength
-        }
-    } catch { $entry = $null }
-
-    if (-not $entry -or -not $entry.overrides) {
+    $bestChoices = @(Get-LlamaCppWizardAutoBestChoices -ModelKey $ModelKey -ContextKey $ContextKey -Mode $Mode)
+    if ($bestChoices.Count -eq 0) {
         return 'manual'
     }
 
-    $score = if ($entry.score) { "profile=$entryProfile score=$($entry.score) $($entry.scoreUnit)" } else { "saved profile" }
-    $scoreSafe = ConvertTo-LocalLLMSpectreSafe $score
-    $choices = [ordered]@{
-        "Use best        -  Apply saved AutoBest settings ($scoreSafe)" = 'best'
-        "Manual settings -  Pick KV cache and launch settings now"      = 'manual'
-        "[[Back]]"                                                      = '__back__'
+    $choices = [ordered]@{}
+    foreach ($item in $bestChoices) {
+        $label = ConvertTo-LocalLLMSpectreSafe ("{0,-13} -  {1}" -f $item.Label, $item.Description)
+        $choices[$label] = $item.Key
     }
+    if ($bestChoices.Count -gt 1) {
+        $choices["Use AutoBest  -  Prefer balanced, then pure automatically"] = 'best:auto'
+    }
+    $choices["Manual settings -  Pick KV cache and launch settings now"] = 'manual'
+    $choices["[[Back]]"] = '__back__'
 
     $chosen = Read-SpectreSelection -Message "Launch settings" -Choices @($choices.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
@@ -1147,6 +1215,31 @@ function Select-LlamaCppPostTuneLaunchActionSpectre {
     $chosen = Read-SpectreSelection -Message "Launch target" -Choices @($choices.Keys) -PageSize 5
     if ($null -eq $chosen) { return $null }
     if ($chosen -eq '[[Cancel]]') { return $null }
+    return [string]$choices[$chosen]
+}
+
+function Select-LlamaCppPostTuneProfileSpectre {
+    param([Parameter(Mandatory = $true)][object[]]$Results)
+
+    $items = @($Results | Where-Object { $_ })
+    if ($items.Count -le 1) {
+        if ($items.Count -eq 1) {
+            return $(if ($items[0].Profile) { [string]$items[0].Profile } else { 'pure' })
+        }
+        return 'auto'
+    }
+
+    $choices = [ordered]@{}
+    foreach ($item in $items) {
+        $profileName = if ($item.Profile) { [string]$item.Profile } else { 'pure' }
+        $label = if ($profileName -eq 'balanced') { 'Balanced' } else { 'Pure' }
+        $choices[(ConvertTo-LocalLLMSpectreSafe ("{0,-8} -  score={1} {2}" -f $label, $item.Score, $item.ScoreUnit))] = $profileName
+    }
+    $choices["[[Cancel]]"] = '__cancel__'
+
+    $chosen = Read-SpectreSelection -Message "Launch profile" -Choices @($choices.Keys) -PageSize 5
+    if ($null -eq $chosen) { return $null }
+    if ($choices[$chosen] -eq '__cancel__') { return $null }
     return [string]$choices[$chosen]
 }
 
@@ -1386,6 +1479,7 @@ function Start-LLMWizardSpectre {
     $kvK          = $null
     $kvV          = $null
     $useAutoBest  = $false
+    $autoBestProfile = 'auto'
     $step         = 'model'
 
     while ($true) {
@@ -1401,6 +1495,7 @@ function Start-LLMWizardSpectre {
 
                 $useStrict = $false
                 $useAutoBest = $false
+                $autoBestProfile = 'auto'
                 $step = 'quant'
             }
 
@@ -1486,6 +1581,7 @@ function Start-LLMWizardSpectre {
                     }
                 } else {
                     $useAutoBest = $false
+                    $autoBestProfile = 'auto'
                     $step = 'launch'
                 }
             }
@@ -1498,15 +1594,18 @@ function Start-LLMWizardSpectre {
                     Select-LlamaCppLaunchSettingsModeSpectre -ModelKey $capturedModel -ContextKey $capturedContext -Mode $capturedMode
                 }
                 if ($null -eq $modeChoice) { $step = 'action'; break }
-                if ($modeChoice -eq 'best') {
+                if ($modeChoice -like 'best:*') {
                     $kvK = $null
                     $kvV = $null
                     $useAutoBest = $true
+                    $autoBestProfile = [string]($modeChoice -replace '^best:', '')
+                    if ([string]::IsNullOrWhiteSpace($autoBestProfile)) { $autoBestProfile = 'auto' }
                     $step = 'launch'
                     break
                 }
 
                 $useAutoBest = $false
+                $autoBestProfile = 'auto'
                 $step = 'kvcache'
             }
 
@@ -1528,6 +1627,7 @@ function Start-LLMWizardSpectre {
                 $kvK = $picked.K
                 $kvV = $picked.V
                 $useAutoBest = $false
+                $autoBestProfile = 'auto'
                 $step = 'launch'
             }
 
@@ -1535,7 +1635,7 @@ function Start-LLMWizardSpectre {
                 try {
                     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
                         -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -UseSpectrePrompts
+                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -UseSpectrePrompts
                 }
                 catch {
                     Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend/strict=$useStrict)"

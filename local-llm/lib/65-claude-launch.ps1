@@ -175,10 +175,11 @@ function Test-ClaudeLocalVisibleResponse {
     param(
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][string]$Model,
+        [string]$SystemPrompt,
         [int]$TimeoutSec = 90
     )
 
-    $body = @{
+    $payload = @{
         model = $Model
         max_tokens = 32
         stream = $false
@@ -188,7 +189,11 @@ function Test-ClaudeLocalVisibleResponse {
                 content = 'Are you working? Reply with exactly: yes.'
             }
         )
-    } | ConvertTo-Json -Depth 8 -Compress
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SystemPrompt)) {
+        $payload.system = $SystemPrompt
+    }
+    $body = $payload | ConvertTo-Json -Depth 8 -Compress
 
     try {
         $resp = Invoke-RestMethod `
@@ -222,10 +227,14 @@ function Test-ClaudeLocalVisibleResponse {
     }
 
     $text = (($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join '').Trim()
+    $withoutThink = [regex]::Replace($text, '(?is)<think>.*?</think>', '')
+    $withoutThink = [regex]::Replace($withoutThink, '(?is)<think>.*$', '').Trim()
+    $looksAnswered = $withoutThink -match '(?i)\byes\b'
     return [pscustomobject]@{
-        Ok = -not [string]::IsNullOrWhiteSpace($text)
+        Ok = $looksAnswered
         Text = $text
-        Error = ''
+        VisibleText = $withoutThink
+        Error = $(if ($looksAnswered) { '' } elseif ([string]::IsNullOrWhiteSpace($text)) { 'no visible response text' } else { 'response did not contain the requested visible answer' })
     }
 }
 
@@ -739,12 +748,14 @@ function Start-ClaudeWithLlamaCppModel {
         $effectiveBaseUrl = "http://localhost:$port"
     }
 
+    $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
+
     if ($AutoBest -and -not [string]::IsNullOrWhiteSpace($autoBestLoadedProfile)) {
-        $smoke = Test-ClaudeLocalVisibleResponse -BaseUrl $effectiveBaseUrl -Model $def.Root
+        $smoke = Test-ClaudeLocalVisibleResponse -BaseUrl $effectiveBaseUrl -Model $def.Root -SystemPrompt $systemPrompt
         if (-not $smoke.Ok -and $useNoThinkProxy) {
             Write-Warning "AutoBest: launch smoke through no-think proxy produced no visible text; trying direct llama-server routing for this session."
             $directBaseUrl = "http://localhost:$port"
-            $directSmoke = Test-ClaudeLocalVisibleResponse -BaseUrl $directBaseUrl -Model $def.Root
+            $directSmoke = Test-ClaudeLocalVisibleResponse -BaseUrl $directBaseUrl -Model $def.Root -SystemPrompt $systemPrompt
             if ($directSmoke.Ok) {
                 $effectiveBaseUrl = $directBaseUrl
             } else {
@@ -780,8 +791,6 @@ function Start-ClaudeWithLlamaCppModel {
         Write-Host "  Tools    : $toolsLabel" -ForegroundColor DarkGray
         Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray
         Write-Host ""
-
-        $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
 
         $launchArgs = if ($LimitTools) {
             @(

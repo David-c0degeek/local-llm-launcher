@@ -49,12 +49,19 @@ profiles only.
 
 After a saved profile is applied and llama-server is healthy, LocalBox performs
 a small Anthropic-compatible `/v1/messages` launch smoke request before handing
-the session to Claude or Unshackled. For strip-mode models this first uses the
-no-think proxy, matching the normal launch route. If that proxy route returns
-no visible assistant text, LocalBox tries the direct llama-server route for the
-same session. If neither route produces visible text, AutoBest launch aborts so
-a high-throughput profile cannot silently become an unusable interactive
-session.
+the session to Claude or Unshackled. The smoke includes the real launch system
+prompt and must produce the requested visible answer; output inside
+`<think>...</think>` is ignored for this check. For strip-mode models this first
+uses the no-think proxy, matching the normal launch route. If that proxy route
+does not produce the requested visible answer, LocalBox tries the direct
+llama-server route for the same session. If neither route succeeds, AutoBest
+launch aborts so a high-throughput profile cannot silently become an unusable
+interactive session.
+
+The wizard exposes saved selection profiles directly. When both `balanced` and
+`pure` entries exist, launch settings include explicit profile choices in
+addition to the `auto` preference (`balanced`, then `pure`). Immediate launch
+after a `-Profile both` tuning run asks which saved profile should be replayed.
 
 BenchPilot-compatible exports add provenance without changing the launch-time
 reader:

@@ -699,15 +699,22 @@ warns and falls through to defaults. Caller-supplied `-KvCacheK` / `-KvCacheV`
 / `-ExtraArgs` always win over the saved values.
 
 Before handing an AutoBest llama.cpp session to Claude or Unshackled, LocalBox
-sends a tiny `/v1/messages` smoke request through the same Anthropic-compatible
-route. If the no-think proxy route produces no visible text, LocalBox tries a
-direct llama-server route for that session. If both routes fail, launch stops
-immediately instead of starting an unusable spinner-only session.
+sends a tiny `/v1/messages` smoke request, including the same system prompt
+used for the real launch, through the same Anthropic-compatible route. The
+smoke must produce the requested visible answer; text hidden inside
+`<think>...</think>` does not count. If the no-think proxy route fails,
+LocalBox tries a direct llama-server route for that session. If both routes
+fail, launch stops immediately instead of starting an unusable spinner-only
+session.
 
 In the wizard, choose the llama.cpp backend and then **Find best settings** to
 run the same tuner interactively, with prompts for normal vs deep tuning,
 pure vs balanced vs both selection profiles, KV variation, saving the winner,
 and launching immediately with `-AutoBest`.
+When both pure and balanced profiles are saved, the launch-settings step shows
+separate **Use balanced** and **Use pure** choices, plus **Use AutoBest** for
+the default balanced-then-pure preference. After a `-Profile both` tuning run,
+the immediate-launch flow also asks which saved profile to use.
 Choose **Delete best settings** from the same action menu to remove saved
 AutoBest entries for the selected `(model, quant, context, backend mode, VRAM)`
 before re-tuning.
