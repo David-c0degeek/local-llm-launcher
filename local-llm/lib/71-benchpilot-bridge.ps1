@@ -282,7 +282,7 @@ function Show-BenchPilotLauncherStatus {
     }
     else {
         Write-Host "BenchPilot : not found" -ForegroundColor DarkGray
-        Write-Host "Fallback   : legacy tuner $($(if ($script:Cfg.BenchPilotAllowLegacyFallback) { 'enabled' } else { 'disabled' }))" -ForegroundColor DarkGray
+        Write-Host "Tuning     : unavailable until BenchPilot is installed" -ForegroundColor DarkGray
         Write-Host "Configure  : setllm BenchPilotRoot <path-to-benchpilot>" -ForegroundColor DarkGray
     }
 

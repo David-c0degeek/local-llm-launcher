@@ -505,13 +505,16 @@ Trim-LLMBenchHistory -OlderThanDays 90           # apply pruning
 
 ---
 
-## llama.cpp auto-tuner (`findbest`)
+## BenchPilot auto-tuner (`findbest`)
 
-`findbest` searches the perf-only flag space for the highest-throughput launch
-config on this machine — without touching anything that could affect generation
-quality (quant, context, KV cache types stay locked unless you explicitly
-widen). Result lands in `~/.local-llm/tuner/best-<key>.json` and is replayed by
-`Start-ClaudeWithLlamaCppModel -AutoBest`.
+`findbest` is a LocalBox compatibility command that delegates tuning to
+[BenchPilot](https://github.com/David-c0degeek/benchpilot). LocalBox no longer
+contains a legacy benchmark/search implementation; BenchPilot is the single
+owner of benchmark execution, scoring, reports, and AutoBest export.
+
+BenchPilot writes a LocalBox-compatible result to
+`~/.local-llm/tuner/best-<key>.json`, and `Start-ClaudeWithLlamaCppModel
+-AutoBest` replays that saved profile.
 
 ```powershell
 # Tune q36plus at the 256k context preset, native llama.cpp, default budget
@@ -539,10 +542,9 @@ findbest q36plus -ContextKey 256k -PromptLengths short,long
 Show-LlamaCppTunerHistory -Key q36plus -Last 50
 ```
 
-When `llama-bench.exe` is available in mainline mode, the tuner automatically
-uses it for the coarse performance-only phases and verifies the winner through
-`llama-server` before saving. Turboquant mode and KV-cache probes stay on the
-server path for fidelity.
+BenchPilot may use fast benchmark probes where supported, but LocalBox treats
+BenchPilot as authoritative and only consumes the exported AutoBest profile.
+Turboquant mode and KV-cache behavior are validated by BenchPilot before export.
 
 **What gets searched:**
 

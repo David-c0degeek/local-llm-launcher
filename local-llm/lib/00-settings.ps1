@@ -69,14 +69,14 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("LlamaCppNoMmap"))                { $cfg.LlamaCppNoMmap = $true }
     if (-not $cfg.ContainsKey("BenchPilotRoot"))                { $cfg.BenchPilotRoot = "" }
     if (-not $cfg.ContainsKey("BenchPilotRepoUrl"))             { $cfg.BenchPilotRepoUrl = "https://github.com/David-c0degeek/benchpilot" }
-    if (-not $cfg.ContainsKey("BenchPilotPreferExternal"))      { $cfg.BenchPilotPreferExternal = $true }
-    if (-not $cfg.ContainsKey("BenchPilotAllowLegacyFallback")) { $cfg.BenchPilotAllowLegacyFallback = $true }
     if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
 
     # Drop the obsolete docker-image setting if a stale settings.json or
     # catalog still carries it.
     if ($cfg.ContainsKey("LlamaCppDockerImage")) { $cfg.Remove("LlamaCppDockerImage") | Out-Null }
+    if ($cfg.ContainsKey("BenchPilotPreferExternal")) { $cfg.Remove("BenchPilotPreferExternal") | Out-Null }
+    if ($cfg.ContainsKey("BenchPilotAllowLegacyFallback")) { $cfg.Remove("BenchPilotAllowLegacyFallback") | Out-Null }
 
     $cfg.LlamaCppServerPath     = Expand-LocalLLMPath $cfg.LlamaCppServerPath
     $cfg.LlamaCppTurboquantRoot = Expand-LocalLLMPath $cfg.LlamaCppTurboquantRoot
