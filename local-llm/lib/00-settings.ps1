@@ -71,6 +71,7 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("BenchPilotRepoUrl"))             { $cfg.BenchPilotRepoUrl = "https://github.com/David-c0degeek/benchpilot" }
     if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
+    if (-not $cfg.ContainsKey("UnshackledRoot"))                { $cfg.UnshackledRoot = "%USERPROFILE%\\.local-llm\\tools\\unshackled" }
 
     # Drop the obsolete docker-image setting if a stale settings.json or
     # catalog still carries it.
