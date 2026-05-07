@@ -170,6 +170,65 @@ function Stop-NoThinkProxy {
     $script:NoThinkProxyProcess = $null
 }
 
+function Test-ClaudeLocalVisibleResponse {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Model,
+        [int]$TimeoutSec = 90
+    )
+
+    $body = @{
+        model = $Model
+        max_tokens = 32
+        stream = $false
+        messages = @(
+            @{
+                role = 'user'
+                content = 'Are you working? Reply with exactly: yes.'
+            }
+        )
+    } | ConvertTo-Json -Depth 8 -Compress
+
+    try {
+        $resp = Invoke-RestMethod `
+            -Uri "$BaseUrl/v1/messages" `
+            -Method Post `
+            -Headers @{ 'anthropic-version' = '2023-06-01'; 'x-api-key' = 'local' } `
+            -ContentType 'application/json' `
+            -Body $body `
+            -TimeoutSec $TimeoutSec
+    }
+    catch {
+        return [pscustomobject]@{
+            Ok = $false
+            Text = ''
+            Error = $_.Exception.Message
+        }
+    }
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    if ($resp -and $resp.content) {
+        foreach ($block in @($resp.content)) {
+            if ($block -is [string]) {
+                $parts.Add($block) | Out-Null
+                continue
+            }
+            $prop = $block.PSObject.Properties['text']
+            if ($prop -and -not [string]::IsNullOrWhiteSpace([string]$prop.Value)) {
+                $parts.Add([string]$prop.Value) | Out-Null
+            }
+        }
+    }
+
+    $text = (($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join '').Trim()
+    return [pscustomobject]@{
+        Ok = -not [string]::IsNullOrWhiteSpace($text)
+        Text = $text
+        Error = ''
+    }
+}
+
 function Ensure-UnshackledInstalled {
     # Confirms an Unshackled checkout exists at $script:Cfg.UnshackledRoot.
     # If not, asks before cloning from $script:Cfg.UnshackledRepoUrl.
@@ -554,6 +613,7 @@ function Start-ClaudeWithLlamaCppModel {
     # Caller-supplied args (KvCacheK/KvCacheV/ExtraArgs above) take precedence
     # because they were set before this block — we only fill in keys that
     # haven't already been bound.
+    $autoBestLoadedProfile = $null
     if ($AutoBest) {
         $bestEntry = $null
         $selectionProfile = if ($AutoBestProfile -in @('pure', 'balanced')) { $AutoBestProfile } else { 'auto' }
@@ -570,6 +630,7 @@ function Start-ClaudeWithLlamaCppModel {
             }
         }
         if ($bestEntry -and $bestEntry.overrides) {
+            $autoBestLoadedProfile = $loadedProfile
             Write-Host "AutoBest: loaded saved tuner config (profile=$loadedProfile, score=$($bestEntry.score) $($bestEntry.scoreUnit), trials=$($bestEntry.trial_count))." -ForegroundColor Cyan
             if ([string]$bestEntry.scoreUnit -match '^(gen|tg)_') {
                 Write-Warning "AutoBest: this is a generation-only profile. Re-run: findbest $Key -ContextKey $ContextKey -Mode $Mode"
@@ -678,12 +739,36 @@ function Start-ClaudeWithLlamaCppModel {
         $effectiveBaseUrl = "http://localhost:$port"
     }
 
+    if ($AutoBest -and -not [string]::IsNullOrWhiteSpace($autoBestLoadedProfile)) {
+        $smoke = Test-ClaudeLocalVisibleResponse -BaseUrl $effectiveBaseUrl -Model $def.Root
+        if (-not $smoke.Ok -and $useNoThinkProxy) {
+            Write-Warning "AutoBest: launch smoke through no-think proxy produced no visible text; trying direct llama-server routing for this session."
+            $directBaseUrl = "http://localhost:$port"
+            $directSmoke = Test-ClaudeLocalVisibleResponse -BaseUrl $directBaseUrl -Model $def.Root
+            if ($directSmoke.Ok) {
+                $effectiveBaseUrl = $directBaseUrl
+            } else {
+                $detail = if (-not [string]::IsNullOrWhiteSpace($directSmoke.Error)) { $directSmoke.Error } else { 'no visible response text' }
+                throw "AutoBest: saved profile failed launch smoke through proxy and direct llama-server route ($detail). Re-run tuning or launch without -AutoBest."
+            }
+        } elseif (-not $smoke.Ok) {
+            $detail = if (-not [string]::IsNullOrWhiteSpace($smoke.Error)) { $smoke.Error } else { 'no visible response text' }
+            throw "AutoBest: saved profile failed launch smoke ($detail). Re-run tuning or launch without -AutoBest."
+        }
+    }
+
     try {
-        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:(-not $useNoThinkProxy)
+        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep')
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
-        $thinkingLabel = if ($useNoThinkProxy) { "stripped via no-think-proxy:$($script:NoThinkProxyPort)" } else { "kept (direct to llama-server)" }
+        $thinkingLabel = if ($thinkingPolicy -eq 'keep') {
+            "kept (direct to llama-server)"
+        } elseif ($effectiveBaseUrl -eq "http://localhost:$($script:NoThinkProxyPort)") {
+            "stripped via no-think-proxy:$($script:NoThinkProxyPort)"
+        } else {
+            "disabled; direct route after proxy smoke fallback"
+        }
 
         Write-Host ""
         Write-Host "Launching $backendLabel with $($def.Root) via llama.cpp ($Mode)..." -ForegroundColor Cyan

@@ -540,7 +540,8 @@ findbest q36plus -ContextKey 256k -SearchStrategy beam -BeamWidth 3
 findbest q36plus -ContextKey 256k -Optimize prompt
 findbest q36plus -ContextKey 256k -Optimize gen
 
-# Allow KV cache variation (default = the model's current single type)
+# Allow KV cache variation. Native mode defaults to the model's current type;
+# turboquant mode always also tests turbo3/turbo4 KV cache encodings.
 findbest q36plus -ContextKey 256k -AllowedKvTypes q8_0,f16
 
 # Try mismatched K/V pairs too, and allow an explicit quality trade if wanted
@@ -558,6 +559,13 @@ mode uses `llama-server` probes so `turbo3` / `turbo4` are measured through the
 same binary LocalBox will actually launch. Upstream `llama-bench` has KV-cache
 flags (`-ctk` / `-ctv`), but TurboQuant cache types only work in a fork/build
 that registers them; LocalBox's turboquant path uses TheTom's fork.
+
+`-Quant` selects the GGUF model file and stays fixed during a tuner run. `KvK`
+and `KvV` are only runtime KV-cache encodings. In native mode BenchPilot
+defaults KV search to the model's current cache type unless you pass
+`-AllowedKvTypes`. In turboquant mode BenchPilot always includes `turbo3` and
+`turbo4` as KV-cache candidates and probes them early, because otherwise a
+turboquant "best" run may never test the backend's defining cache encodings.
 
 During a run, BenchPilot prints one row per candidate:
 
@@ -605,10 +613,12 @@ Extra `Name=value` pairs at the end are the settings changed for that trial:
 - `KvK` — KV-cache type for attention keys, passed as `-ctk`.
 - `KvV` — KV-cache type for attention values, passed as `-ctv`.
 
-KV-cache values are llama.cpp cache quant types such as `f16`, `q8_0`, `q4_0`,
-or, in TheTom turboquant builds, `turbo3` / `turbo4`. KV changes can affect
-quality, so BenchPilot only widens that search when requested and can run a
-perplexity sanity check before saving a faster KV pair.
+KV-cache values are llama.cpp cache encodings such as `f16`, `q8_0`, `q4_0`,
+or, in TheTom turboquant builds, `turbo3` / `turbo4`. These are not GGUF model
+quants like `Q4_K_M`, `Q8_0`, or APEX variants; they only change how the
+runtime stores attention keys/values. KV changes can affect quality, so
+BenchPilot runs a perplexity sanity check before saving a faster changed KV
+pair unless `-AllowKvQualityRegression` is passed.
 
 Skip/pruning messages use the same ideas with shorter llama.cpp-style labels:
 `ngl` means `NGpuLayers`, `ub` means `UbatchSize`, `b` means `BatchSize`,
@@ -635,10 +645,12 @@ width 3 unless you pass `-SearchStrategy` / `-BeamWidth` explicitly.
    (`-Aggressive` tries the cross-combinations too).
 6. **threads** — sweeps CPU thread counts when the winning config keeps MoE
    experts or dense layers on CPU.
-7. **kv** — only runs when `-AllowedKvTypes` contains more than one type.
-   KV variation can change generations, so widened searches are an explicit
-   opt-in; the tuner runs a small perplexity sanity check and refuses a >1%
-   regression unless `-AllowKvQualityRegression` is passed.
+7. **kv** — runs when more than one KV-cache encoding is available. Native mode
+   only widens this phase when `-AllowedKvTypes` is supplied. Turboquant mode
+   always includes `turbo3` and `turbo4`, and probes KV early enough that the
+   normal MoE/batch grid cannot consume the whole default budget first. The
+   tuner runs a small perplexity sanity check and refuses a >1% regression
+   unless `-AllowKvQualityRegression` is passed.
 8. **deep** — optional (`-Deep`). Re-tests a finer local neighborhood around
    the winning offload value, expands the batch grid up to `-ub 2048` /
    `-b 4096`, re-checks flash-attention after batch changes, and tries a wider
@@ -685,6 +697,12 @@ The launcher matches the saved entry on `(key, contextKey, mode, profile,
 prompt_length, quant, vramGB ± 1)` and a tuner-version stamp; on a miss it
 warns and falls through to defaults. Caller-supplied `-KvCacheK` / `-KvCacheV`
 / `-ExtraArgs` always win over the saved values.
+
+Before handing an AutoBest llama.cpp session to Claude or Unshackled, LocalBox
+sends a tiny `/v1/messages` smoke request through the same Anthropic-compatible
+route. If the no-think proxy route produces no visible text, LocalBox tries a
+direct llama-server route for that session. If both routes fail, launch stops
+immediately instead of starting an unusable spinner-only session.
 
 In the wizard, choose the llama.cpp backend and then **Find best settings** to
 run the same tuner interactively, with prompts for normal vs deep tuning,

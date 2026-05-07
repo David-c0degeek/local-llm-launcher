@@ -47,6 +47,15 @@ force the selection profile. `-AutoBestProfile short` and
 `-AutoBestProfile long` remain legacy prompt-length overrides and load pure
 profiles only.
 
+After a saved profile is applied and llama-server is healthy, LocalBox performs
+a small Anthropic-compatible `/v1/messages` launch smoke request before handing
+the session to Claude or Unshackled. For strip-mode models this first uses the
+no-think proxy, matching the normal launch route. If that proxy route returns
+no visible assistant text, LocalBox tries the direct llama-server route for the
+same session. If neither route produces visible text, AutoBest launch aborts so
+a high-throughput profile cannot silently become an unusable interactive
+session.
+
 BenchPilot-compatible exports add provenance without changing the launch-time
 reader:
 
