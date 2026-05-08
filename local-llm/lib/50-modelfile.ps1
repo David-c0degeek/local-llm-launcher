@@ -250,7 +250,15 @@ function Remove-ModelAliases {
 
     $def = Get-ModelDef -Key $Key
 
+    $names = New-Object System.Collections.Generic.HashSet[string]
     foreach ($name in (Get-ModelAliasNames -Def $def)) {
+        $names.Add($name) | Out-Null
+    }
+    foreach ($legacyContextKey in @('fast', 'deep', '128')) {
+        $names.Add("$($def.Root)$legacyContextKey") | Out-Null
+    }
+
+    foreach ($name in $names) {
         & ollama rm $name 2>$null | Out-Null
         $stampFile = Get-ProfileVersionFile -ModelName $name
         Remove-Item -Path $stampFile -Force -ErrorAction SilentlyContinue

@@ -601,8 +601,9 @@ function Show-LocalBoxCommandReference {
 
     Write-Host ""
     Write-Host "LocalBox launcher and dashboard" -ForegroundColor Green
-    Write-CommandRow -Command "llm, llmmenu" -Description "Open the guided launcher wizard."
-    Write-CommandRow -Command "llmc" -Description "Open the classic launcher wizard."
+    Write-CommandRow -Command "llm, llmmenu" -Description "Open the native selectable launcher wizard."
+    Write-CommandRow -Command "llmc" -Description "Alias for the native selectable launcher wizard."
+    Write-CommandRow -Command "llms" -Description "Open the Spectre launcher wizard when PwshSpectreConsole is available."
     Write-CommandRow -Command "info [-All] [<model>]" -Description "Show the dashboard or model details."
     Write-CommandRow -Command "info -Commands" -Description "Show this LocalBox and BenchPilot command list."
     Write-CommandRow -Command "llminfo" -Description "Alias for info."
@@ -782,19 +783,20 @@ function Show-LLMQuickReference {
 
     Write-Host @"
 One function per model — flags select what to do.
-  qcoder -Ctx fast -Unshackled  Code agent (Qwen3-Coder, 32k, Unshackled)
-  q36p -Ctx fast -Unshackled    General Qwen 3.6 agent (32k, Unshackled)
-  dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
-  q36p -Ctx 128 -Unshackled     Big context (Qwen 3.6 Plus, 128k)
+  qcoder -Ctx 32k -Unshackled   Code agent (Qwen3-Coder, 32k, Unshackled)
+  q36p -Ctx 32k -Unshackled     General Qwen 3.6 agent (32k, Unshackled)
+  dev -Ctx 32k                  Smaller / faster (Devstral 24B, 32k)
+  q36p -Ctx 128k -Unshackled    Big context (Qwen 3.6 Plus, 128k)
   qcoder -Ctx 256 -Quant iq4xs  256k coder context (4090 ceiling — no -Q8)
   q36p -Chat                    Raw ollama chat, no Claude Code
   q36p -Q8                      Use q8 KV cache for higher quality
   q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
   llmdefault                    Launch the configured Default model
-  llm                           Guided wizard (rich UI if PwshSpectreConsole is installed)
+  llm                           Guided wizard (native selectable UI)
+  llms                          Spectre wizard (opt-in)
 
 Flags
-  -Ctx <name>     One of the model's contexts (e.g. fast, deep, 128, 256). Omit for default.
+  -Ctx <name>     One of the model's contexts (e.g. 32k, 64k, 128k, 256k). Omit for default.
   -Unshackled     Use Unshackled instead of Claude Code.
   -Chat           Run plain ollama chat (skips Claude Code entirely).
   -Q8             Set OLLAMA_KV_CACHE_TYPE=q8_0 for this launch.
@@ -853,8 +855,8 @@ Tiers
   legacy         Kept for comparison; hidden by default.
 
 Benchmark
-  qkill ; q36p -Ctx fast -Chat ; ospeed q36plusfast -Runs 3
-  qkill ; qcoder -Ctx fast -Chat ; ospeed qcoder30fast -Runs 3
+  qkill ; q36p -Ctx 32k -Chat ; ospeed q36plus32k -Runs 3
+  qkill ; qcoder -Ctx 32k -Chat ; ospeed qcoder3032k -Runs 3
 
 Notes
   Thinking: q36opus47abl uses ThinkingPolicy=keep, which routes it directly at

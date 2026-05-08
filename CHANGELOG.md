@@ -8,6 +8,8 @@ Past-tense record of shipped changes.
 - **`llm-stop`.** Added a hyphenated all-backend stop command alongside `llmstop` / `unloadall`.
 - **Codex launch target.** Model shortcuts and the wizard now support `-Codex` / `Codex` as a peer to Claude Code and Unshackled. Ollama launches use Codex's local Ollama provider; llama.cpp launches pass a custom OpenAI-compatible provider pointed at the selected `llama-server` `/v1` endpoint.
 - **Default launch recipes.** The wizard can save the selected model, target, backend, context, quant, strict/Q8 flags, llama.cpp mode, KV cache, and AutoBest profile into `DefaultLaunch` so `llmdefault` can replay the full recipe.
+- **Wizard default is native selectable.** `llm`/`llmmenu` now use an in-repo arrow-key picker by default. `llms` opens the Spectre wizard explicitly, and `$env:LOCAL_LLM_USE_SPECTRE=1` opts `llm` back into Spectre.
+- **Context menu noise reduced.** Removed visible `fast`, `deep`, and bare `128` context aliases from the catalog and new-model defaults. Use `32k`, `64k`, `128k`, and `256k`; legacy aliases still resolve for old commands and saved AutoBest profiles.
 
 ## 2026-05-07 - Suite updater, Unshackled cleanup
 

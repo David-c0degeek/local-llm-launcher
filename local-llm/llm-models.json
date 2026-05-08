@@ -55,10 +55,7 @@
     "32k": 32768,
     "64k": 65536,
     "128k": 131072,
-    "256k": 262144,
-    "fast": 32768,
-    "deep": 65536,
-    "128": 131072
+    "256k": 262144
     },
     "Strict": true,
     "Description": "This is an uncensored version of Qwen/Qwen3-Coder-Next created with abliteration (see remove-refusals-with-transformers to know more about it). This is a crude, proof-of-concept implementation to remove refusals from an LLM model without using TransformerLens.",
@@ -140,10 +137,7 @@
     "32k": 32768,
     "64k": 65536,
     "128k": 131072,
-    "256k": 262144,
-    "fast": 32768,
-    "deep": 65536,
-    "128": 131072
+    "256k": 262144
     },
     "Strict": true,
     "Description": "<img width=\"400px\" src=\"https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3.6/logo.png\">",
@@ -200,10 +194,7 @@
     "32k": 32768,
     "64k": 65536,
     "128k": 131072,
-    "256k": 262144,
-    "fast": 32768,
-    "deep": 65536,
-    "128": 131072
+    "256k": 262144
     },
     "Strict": true,
     "Description": "<img width=\"400px\" src=\"https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3.6/logo.png\">",
@@ -255,10 +246,7 @@
     "32k": 32768,
     "64k": 65536,
     "128k": 131072,
-    "256k": 262144,
-    "fast": 32768,
-    "deep": 65536,
-    "128": 131072
+    "256k": 262144
     },
     "Strict": true,
     "Description": "<div style=\"background-color: #ff4444; color: white; padding: 20px; border-radius: 10px; text-align: center; margin: 20px 0;\"> <h2 style=\"color: white; margin: 0 0 10px 0;\">🚨⚠️ I HAVE REACHED HUGGING FACE'S FREE STORAGE LIMIT ⚠️🚨</h2> <p style=\"font-size: 18px; margin: 0 0 15px 0;\">I can no longer upload new models unless I can cover the cost of additional storage.<br>I host <b>70+ free model...",

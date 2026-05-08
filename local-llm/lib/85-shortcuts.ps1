@@ -123,6 +123,13 @@ function Unregister-AllModelShortcuts {
             }
         }
 
+        foreach ($legacyContextKey in @('fast', 'deep', '128')) {
+            $base = "$($def.Root)$legacyContextKey"
+            foreach ($suffix in @("", "chat", "q8")) {
+                $names.Add("$base$suffix") | Out-Null
+            }
+        }
+
         if ($def.ContainsKey("Quants") -and $def.Contains("QuantShortcut")) {
             foreach ($quantKey in $def.Quants.Keys) {
                 $names.Add("set$($def.QuantShortcut)$quantKey") | Out-Null

@@ -96,6 +96,8 @@ function Save-LlamaCppBestConfig {
         [System.Collections.IDictionary]$ScoreBreakdown = @{}
     )
 
+    $def = Get-ModelDef -Key $Key
+    $ContextKey = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
     $path = Get-LlamaCppTunerBestFile -Key $Key
 
     $existing = if (Test-Path $path) {
@@ -118,8 +120,9 @@ function Save-LlamaCppBestConfig {
     $entries = @($existing.entries | Where-Object {
         $entryPromptLength = if ($_['prompt_length']) { [string]$_['prompt_length'] } else { 'short' }
         $entryProfile = if ($_['profile']) { [string]$_['profile'] } else { 'pure' }
+        $entryContextKey = try { Resolve-ModelContextKey -Def $def -ContextKey ([string]$_.contextKey) } catch { [string]$_.contextKey }
         $_.quant -ne $Quant -or
-        $_.contextKey -ne $ContextKey -or
+        $entryContextKey -ne $ContextKey -or
         $_.mode -ne $Mode -or
         [int]$_.vramGB -ne $VramGB -or
         $entryPromptLength -ne $PromptLength -or
@@ -191,14 +194,16 @@ function Get-BestLlamaCppConfig {
     }
 
     if (-not $VramGB) { $VramGB = Get-LocalLLMVRAMGB }
+    $def = Get-ModelDef -Key $Key
+    $ContextKey = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
 
     if ([string]::IsNullOrWhiteSpace($Quant)) {
-        $def = Get-ModelDef -Key $Key
         if ($def.Contains('Quant')) { $Quant = [string]$def.Quant }
     }
 
     foreach ($entry in $data.entries) {
-        if ($entry.contextKey -ne $ContextKey) { continue }
+        $entryContextKey = try { Resolve-ModelContextKey -Def $def -ContextKey ([string]$entry.contextKey) } catch { [string]$entry.contextKey }
+        if ($entryContextKey -ne $ContextKey) { continue }
         if ($entry.mode       -ne $Mode)       { continue }
         $entryPromptLength = if ($entry.prompt_length) { [string]$entry.prompt_length } else { 'short' }
         if ($entryPromptLength -ne $PromptLength) { continue }
@@ -275,8 +280,11 @@ function Get-LlamaCppBestConfigCandidates {
     catch { return @() }
 
     if (-not $data -or -not $data.entries) { return @() }
+    $def = Get-ModelDef -Key $Key
+    $ContextKey = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
     return @($data.entries | Where-Object {
-        $_.contextKey -eq $ContextKey -and
+        $entryContextKey = try { Resolve-ModelContextKey -Def $def -ContextKey ([string]$_.contextKey) } catch { [string]$_.contextKey }
+        $entryContextKey -eq $ContextKey -and
         $_.mode -eq $Mode -and
         ($(if ($_.prompt_length) { [string]$_.prompt_length } else { 'short' }) -eq $PromptLength) -and
         ($(if ($_.profile) { [string]$_.profile } else { 'pure' }) -eq $Profile) -and
@@ -297,8 +305,9 @@ function Remove-LlamaCppBestConfig {
     )
 
     if (-not $VramGB) { $VramGB = Get-LocalLLMVRAMGB }
+    $def = Get-ModelDef -Key $Key
+    $ContextKey = Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
     if ([string]::IsNullOrWhiteSpace($Quant)) {
-        $def = Get-ModelDef -Key $Key
         if ($def.Contains('Quant')) { $Quant = [string]$def.Quant }
     }
 
@@ -329,8 +338,9 @@ function Remove-LlamaCppBestConfig {
             $entryPromptLength -eq $PromptLength
         }
 
+        $entryContextKey = try { Resolve-ModelContextKey -Def $def -ContextKey ([string]$entry.contextKey) } catch { [string]$entry.contextKey }
         $matches = (
-            $entry.contextKey -eq $ContextKey -and
+            $entryContextKey -eq $ContextKey -and
             $entry.mode -eq $Mode -and
             $vramMatches -and
             $promptMatches -and

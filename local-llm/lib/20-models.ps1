@@ -141,6 +141,8 @@ function Get-ModelAliasName {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey
     )
 
+    $ContextKey = Resolve-ModelContextKey -Def $Def -ContextKey $ContextKey
+
     if ([string]::IsNullOrWhiteSpace($ContextKey)) {
         return $Def.Root
     }
@@ -166,7 +168,48 @@ function Get-ModelContextValue {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey
     )
 
+    $ContextKey = Resolve-ModelContextKey -Def $Def -ContextKey $ContextKey
     return $Def.Contexts[$ContextKey]
+}
+
+function Resolve-ModelContextKey {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [AllowEmptyString()][string]$ContextKey
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ContextKey)) {
+        $ContextKey = ''
+    }
+
+    if ($Def.Contexts.Contains($ContextKey)) {
+        return $ContextKey
+    }
+
+    foreach ($key in $Def.Contexts.Keys) {
+        if ([string]$key -ieq $ContextKey) {
+            return [string]$key
+        }
+    }
+
+    $legacyAliases = @{
+        'fast' = '32k'
+        'deep' = '64k'
+        '128'  = '128k'
+    }
+
+    $aliasKey = $ContextKey.ToLowerInvariant()
+    if ($legacyAliases.ContainsKey($aliasKey)) {
+        $target = $legacyAliases[$aliasKey]
+        if ($Def.Contexts.Contains($target)) {
+            return $target
+        }
+    }
+
+    $available = @($Def.Contexts.Keys | ForEach-Object {
+        if ([string]::IsNullOrWhiteSpace($_)) { 'default' } else { [string]$_ }
+    }) -join ', '
+    throw "Unknown context '$ContextKey'. Available: $available"
 }
 
 function Resolve-ModelQuantKey {
@@ -226,6 +269,8 @@ function Get-ModelContextNote {
     )
 
     if (-not $Def.Contains("ContextNotes") -or -not $Def.ContextNotes) { return "" }
+
+    $ContextKey = Resolve-ModelContextKey -Def $Def -ContextKey $ContextKey
 
     # Empty string is a valid key (the "default" context). Match it literally first.
     foreach ($k in $Def.ContextNotes.Keys) {

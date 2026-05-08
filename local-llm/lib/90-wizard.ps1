@@ -1,6 +1,6 @@
-# Interactive wizard. Two implementations: a classic Read-Host one and a
-# Spectre.Console one. Start-LLMWizard picks at runtime based on whether
-# PwshSpectreConsole is available (and LOCAL_LLM_NO_SPECTRE is not set).
+# Interactive wizard. Two implementations: a native selectable console one and
+# a Spectre.Console one. Start-LLMWizard defaults to the native picker; Spectre
+# remains available through llms or LOCAL_LLM_USE_SPECTRE=1.
 
 function Format-LLMContextLabel {
     param(
@@ -26,7 +26,7 @@ function Format-LLMContextLabel {
 }
 
 function Read-LLMChoiceIndex {
-    # Returns an integer index (>= 0) for a numbered selection, -1 for ZeroLabel,
+    # Returns an integer index (>= 0) for a selected item, -1 for ZeroLabel,
     # or the matching letter (as a string) when a LetterChoices entry is picked.
     param(
         [Parameter(Mandatory = $true)][string]$Title,
@@ -35,6 +35,10 @@ function Read-LLMChoiceIndex {
         [string]$ZeroLabel = "Back",
         [hashtable]$LetterChoices = @{}
     )
+
+    if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+        return (Read-LLMChoiceIndexNative -Title $Title -Items $Items -Label $Label -ZeroLabel $ZeroLabel -LetterChoices $LetterChoices)
+    }
 
     while ($true) {
         Write-Section $Title
@@ -361,34 +365,50 @@ function Set-ModelQuantForSelectedLaunch {
 
 function Read-LLMQ8Toggle {
     # Returns $true (q8 on), $false (q8 off), or $null (back).
-    while ($true) {
-        Write-Host ""
-        $answer = (Read-Host "Use q8 KV cache? [y/N/b=back]").Trim().ToLowerInvariant()
+    $items = @(
+        [pscustomobject]@{ Key = $false; Label = 'No';  Description = 'Default KV cache behavior' },
+        [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = 'Use q8_0 KV cache for this launch' }
+    )
 
-        if ([string]::IsNullOrWhiteSpace($answer) -or $answer -in @("n", "no")) { return $false }
-        if ($answer -in @("y", "yes")) { return $true }
-        if ($answer -in @("b", "back")) { return $null }
+    $idx = Read-LLMChoiceIndex `
+        -Title "Use q8 KV cache?" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
 
-        Write-Host "Answer y, n, or b." -ForegroundColor Red
+    if ($idx -lt 0) {
+        return $null
     }
+
+    return [bool]$items[$idx].Key
 }
 
 function Read-LLMStrictToggle {
     # Returns $true (strict on), $false (strict off), or $null (back).
     # Only meaningful when the selected model has Strict: true in the catalog;
     # the wizard gates this prompt on Get-ModelStrictEnabled.
-    while ($true) {
-        Write-Host ""
-        Write-Host "Strict mode launches the <root>-strict alias (overlay system prompt + tightened sampling)." -ForegroundColor DarkGray
-        Write-Host "Strict pins to the model's strict-base context, so context selection is skipped." -ForegroundColor DarkGray
-        $answer = (Read-Host "Use strict mode? [y/N/b=back]").Trim().ToLowerInvariant()
+    $items = @(
+        [pscustomobject]@{ Key = $false; Label = 'No';  Description = 'Use the base alias and continue to context selection' },
+        [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = 'Use the strict alias; pins context and skips context selection' }
+    )
 
-        if ([string]::IsNullOrWhiteSpace($answer) -or $answer -in @("n", "no")) { return $false }
-        if ($answer -in @("y", "yes")) { return $true }
-        if ($answer -in @("b", "back")) { return $null }
+    $idx = Read-LLMChoiceIndex `
+        -Title "Use strict mode?" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label {
+            param($item, $i)
+            "$($item.Label)  -  $($item.Description)"
+        }
 
-        Write-Host "Answer y, n, or b." -ForegroundColor Red
+    if ($idx -lt 0) {
+        return $null
     }
+
+    return [bool]$items[$idx].Key
 }
 
 function Read-LLMYesNo {
@@ -397,14 +417,35 @@ function Read-LLMYesNo {
         [bool]$DefaultYes = $false
     )
 
-    $suffix = if ($DefaultYes) { "[Y/n]" } else { "[y/N]" }
-    while ($true) {
-        $answer = (Read-Host "$Prompt $suffix").Trim().ToLowerInvariant()
-        if ([string]::IsNullOrWhiteSpace($answer)) { return $DefaultYes }
-        if ($answer -in @("y", "yes")) { return $true }
-        if ($answer -in @("n", "no"))  { return $false }
-        Write-Host "Answer y or n." -ForegroundColor Red
+    $items = if ($DefaultYes) {
+        @(
+            [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = 'Default' },
+            [pscustomobject]@{ Key = $false; Label = 'No';  Description = '' }
+        )
+    } else {
+        @(
+            [pscustomobject]@{ Key = $false; Label = 'No';  Description = 'Default' },
+            [pscustomobject]@{ Key = $true;  Label = 'Yes'; Description = '' }
+        )
     }
+
+    $idx = Read-LLMChoiceIndex `
+        -Title $Prompt `
+        -Items $items `
+        -ZeroLabel $(if ($DefaultYes) { "Default: Yes" } else { "Default: No" }) `
+        -Label {
+            param($item, $i)
+            if ([string]::IsNullOrWhiteSpace($item.Description)) {
+                return $item.Label
+            }
+            return "$($item.Label)  -  $($item.Description)"
+        }
+
+    if ($idx -lt 0) {
+        return $DefaultYes
+    }
+
+    return [bool]$items[$idx].Key
 }
 
 function Read-LLMTuneDepth {
@@ -648,6 +689,170 @@ function Invoke-LlamaCppTunerWizardFlow {
         }
 
         Start-ClaudeWithLlamaCppModel @launchArgs
+    }
+}
+
+function Read-LLMChoiceIndexNative {
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][object[]]$Items,
+        [Parameter(Mandatory = $true)][scriptblock]$Label,
+        [string]$ZeroLabel = "Back",
+        [hashtable]$LetterChoices = @{}
+    )
+
+    $options = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $Items.Count; $i++) {
+        $options.Add([pscustomobject]@{
+            Kind = 'item'
+            Key = $i
+            Shortcut = [string]($i + 1)
+            Text = [string](& $Label $Items[$i] $i)
+        }) | Out-Null
+    }
+
+    $options.Add([pscustomobject]@{
+        Kind = 'zero'
+        Key = -1
+        Shortcut = '0'
+        Text = $ZeroLabel
+    }) | Out-Null
+
+    foreach ($letter in @($LetterChoices.Keys | Sort-Object)) {
+        $options.Add([pscustomobject]@{
+            Kind = 'letter'
+            Key = [string]$letter
+            Shortcut = [string]$letter
+            Text = [string]$LetterChoices[$letter]
+        }) | Out-Null
+    }
+
+    $selected = 0
+    $typed = ''
+    $message = ''
+
+    while ($true) {
+        Clear-Host
+        Write-Section $Title
+        Write-Host "Use Up/Down, Enter to select, 0 for $ZeroLabel. Number and letter shortcuts work too." -ForegroundColor DarkGray
+        if (-not [string]::IsNullOrWhiteSpace($typed)) {
+            Write-Host "Typed: $typed" -ForegroundColor DarkGray
+        }
+        if (-not [string]::IsNullOrWhiteSpace($message)) {
+            Write-Host $message -ForegroundColor Yellow
+        }
+        Write-Host ""
+
+        for ($i = 0; $i -lt $options.Count; $i++) {
+            $option = $options[$i]
+            $lines = @(([string]$option.Text) -split "`r?`n")
+            if ($lines.Count -eq 0) { $lines = @('') }
+
+            $prefix = if ($i -eq $selected) { '>' } else { ' ' }
+            $shortcut = $option.Shortcut
+            $color = if ($i -eq $selected) { 'Cyan' } elseif ($option.Kind -eq 'item') { 'Gray' } else { 'Yellow' }
+
+            Write-Host ("{0} {1,3}  {2}" -f $prefix, $shortcut, $lines[0]) -ForegroundColor $color
+            for ($lineIndex = 1; $lineIndex -lt $lines.Count; $lineIndex++) {
+                Write-Host ("       {0}" -f $lines[$lineIndex]) -ForegroundColor DarkGray
+            }
+        }
+
+        $keyInfo = [Console]::ReadKey($true)
+        $message = ''
+
+        switch ($keyInfo.Key) {
+            'UpArrow' {
+                $selected--
+                if ($selected -lt 0) { $selected = $options.Count - 1 }
+                $typed = ''
+                continue
+            }
+            'DownArrow' {
+                $selected++
+                if ($selected -ge $options.Count) { $selected = 0 }
+                $typed = ''
+                continue
+            }
+            'Home' {
+                $selected = 0
+                $typed = ''
+                continue
+            }
+            'End' {
+                $selected = $options.Count - 1
+                $typed = ''
+                continue
+            }
+            'Enter' {
+                $picked = $options[$selected]
+                if ($picked.Kind -eq 'item') { return [int]$picked.Key }
+                if ($picked.Kind -eq 'zero') { return -1 }
+                return [string]$picked.Key
+            }
+            'Escape' {
+                return -1
+            }
+            'Backspace' {
+                if ($typed.Length -gt 0) {
+                    $typed = $typed.Substring(0, $typed.Length - 1)
+                }
+                continue
+            }
+        }
+
+        $char = [string]$keyInfo.KeyChar
+        if ([string]::IsNullOrEmpty($char) -or [char]::IsControl($keyInfo.KeyChar)) {
+            continue
+        }
+
+        $lower = $char.ToLowerInvariant()
+        if ($LetterChoices.ContainsKey($lower)) {
+            return $lower
+        }
+
+        if ($char -eq '0') {
+            return -1
+        }
+
+        if ($char -match '^\d$') {
+            $typed += $char
+            $matches = @($options | Where-Object { $_.Shortcut -like "$typed*" })
+            if ($matches.Count -eq 1 -and $matches[0].Shortcut -eq $typed) {
+                $picked = $matches[0]
+                if ($picked.Kind -eq 'item') { return [int]$picked.Key }
+                if ($picked.Kind -eq 'zero') { return -1 }
+                return [string]$picked.Key
+            }
+
+            $exactIndex = -1
+            for ($i = 0; $i -lt $options.Count; $i++) {
+                if ($options[$i].Shortcut -eq $typed) {
+                    $exactIndex = $i
+                    break
+                }
+            }
+            if ($exactIndex -ge 0) {
+                $selected = $exactIndex
+                continue
+            }
+
+            if ($matches.Count -gt 0) {
+                for ($i = 0; $i -lt $options.Count; $i++) {
+                    if ($options[$i].Shortcut -like "$typed*") {
+                        $selected = $i
+                        break
+                    }
+                }
+                continue
+            }
+
+            $typed = $char
+            $message = "No matching selection."
+            continue
+        }
+
+        $message = "Use arrows, Enter, 0, or a listed shortcut."
     }
 }
 
@@ -1803,8 +2008,22 @@ function llmlogerrclear {
     }
 }
 
-function Start-LLMWizard {
+function Test-LocalLLMWizardSpectreEnabled {
+    return ($env:LOCAL_LLM_USE_SPECTRE -eq '1' -and (Test-LocalLLMSpectreAvailable))
+}
+
+function Start-LLMWizardSpectreExplicit {
     if (Test-LocalLLMSpectreAvailable) {
+        Start-LLMWizardSpectre
+        return
+    }
+
+    Write-Host "PwshSpectreConsole is unavailable or disabled; using the native picker." -ForegroundColor Yellow
+    Start-LLMWizardClassic
+}
+
+function Start-LLMWizard {
+    if (Test-LocalLLMWizardSpectreEnabled) {
         Start-LLMWizardSpectre
         return
     }

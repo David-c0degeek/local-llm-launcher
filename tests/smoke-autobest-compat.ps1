@@ -27,14 +27,14 @@ try {
 
     . $profilePath
 
-    $entry = Get-BestLlamaCppConfig -Key 'q3635ba3b' -ContextKey 'fast' -Mode 'native' -PromptLength 'short' -Quant 'iq2m' -VramGB 24
+    $entry = Get-BestLlamaCppConfig -Key 'q3635ba3b' -ContextKey '32k' -Mode 'native' -PromptLength 'short' -Quant 'iq2m' -VramGB 24
     if (-not $entry) { throw 'Get-BestLlamaCppConfig did not load the BenchPilot fixture entry.' }
     if ($entry.source -ne 'benchpilot') { throw "Expected source benchpilot; got '$($entry.source)'." }
 
     $def = Get-ModelDef -Key 'q3635ba3b'
     $argsParams = @{
         Def = $def
-        ContextKey = 'fast'
+        ContextKey = '32k'
         Mode = 'native'
         ModelArgPath = (Join-Path $env:TEMP 'fixture\model.gguf')
         Port = 18080

@@ -303,10 +303,5 @@ function Get-LocalLLMDefaultContexts {
         '64k'  = 65536
         '128k' = 131072
         '256k' = 262144
-        # Legacy aliases kept so existing shortcuts and saved profiles continue
-        # to resolve while the standard context names become the primary set.
-        'fast' = 32768
-        'deep' = 65536
-        '128'  = 131072
     }
 }

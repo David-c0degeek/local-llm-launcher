@@ -83,15 +83,12 @@ function Build-LlamaServerArgs {
     $argList.Add('-m')          | Out-Null
     $argList.Add($ModelArgPath) | Out-Null
 
-    # Context window. Catalog stores per-context-alias num_ctx values; default
-    # to the largest declared context if the alias key is missing.
+    # Context window. Catalog stores per-context num_ctx values; legacy context
+    # aliases are resolved by Resolve-ModelContextKey.
     $numCtx = $null
-    if ($Def.Contains('Contexts') -and $Def.Contexts.Contains($ContextKey)) {
-        $numCtx = [int]$Def.Contexts[$ContextKey]
-    } else {
-        $values = @()
-        foreach ($v in $Def.Contexts.Values) { try { $values += [int]$v } catch {} }
-        if ($values.Count -gt 0) { $numCtx = ($values | Measure-Object -Maximum).Maximum }
+    if ($Def.Contains('Contexts') -and $Def.Contexts) {
+        $resolvedContextKey = Resolve-ModelContextKey -Def $Def -ContextKey $ContextKey
+        $numCtx = [int]$Def.Contexts[$resolvedContextKey]
     }
 
     if ($numCtx -and $numCtx -gt 0) {
