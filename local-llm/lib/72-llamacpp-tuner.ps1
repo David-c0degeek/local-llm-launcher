@@ -81,11 +81,12 @@ function Save-LlamaCppBestConfig {
         [Parameter(Mandatory = $true)][string]$Mode,
         [Parameter(Mandatory = $true)][string]$Quant,
         [Parameter(Mandatory = $true)][int]$VramGB,
+        [int]$ContextTokens = 0,
         [ValidateSet('short','long')][string]$PromptLength = 'short',
         [Parameter(Mandatory = $true)][string[]]$BestArgs,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$BestOverrides,
         [Parameter(Mandatory = $true)][double]$Score,
-        [string]$ScoreUnit = 'tg_tps_median',
+        [string]$ScoreUnit = 'tg_tps_avg',
         [int]$TrialCount = 0,
         [ValidateSet('pure','balanced')][string]$Profile = 'pure',
         [ValidateSet('greedy','beam')][string]$SearchStrategy = 'greedy',
@@ -110,6 +111,10 @@ function Save-LlamaCppBestConfig {
         }
     }
 
+    if (-not $ContextTokens -or $ContextTokens -le 0) {
+        try { $ContextTokens = [int](Get-ModelContextValue -Def (Get-ModelDef -Key $Key) -ContextKey $ContextKey) } catch {}
+    }
+
     $entries = @($existing.entries | Where-Object {
         $entryPromptLength = if ($_['prompt_length']) { [string]$_['prompt_length'] } else { 'short' }
         $entryProfile = if ($_['profile']) { [string]$_['profile'] } else { 'pure' }
@@ -124,6 +129,7 @@ function Save-LlamaCppBestConfig {
     $newEntry = [ordered]@{
         quant         = $Quant
         contextKey    = $ContextKey
+        contextTokens = $ContextTokens
         mode          = $Mode
         vramGB        = $VramGB
         prompt_length = $PromptLength
@@ -405,11 +411,12 @@ function Save-BestLlamaCppConfig {
         [Parameter(Mandatory = $true)][string]$Mode,
         [Parameter(Mandatory = $true)][string]$Quant,
         [Parameter(Mandatory = $true)][int]$VramGB,
+        [int]$ContextTokens = 0,
         [ValidateSet('short','long')][string]$PromptLength = 'short',
         [Parameter(Mandatory = $true)][string[]]$BestArgs,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$BestOverrides,
         [Parameter(Mandatory = $true)][double]$Score,
-        [string]$ScoreUnit = 'tg_tps_median',
+        [string]$ScoreUnit = 'tg_tps_avg',
         [int]$TrialCount = 0,
         [ValidateSet('pure','balanced')][string]$Profile = 'pure',
         [ValidateSet('greedy','beam')][string]$SearchStrategy = 'greedy',
@@ -431,7 +438,7 @@ function Find-BestLlamaCppConfig {
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
-        [int]$Runs = 1,
+        [int]$Runs = 3,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,
@@ -516,7 +523,7 @@ function findbest {
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
-        [int]$Runs = 1,
+        [int]$Runs = 3,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,
@@ -545,7 +552,7 @@ function tunellm {
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
-        [int]$Runs = 1,
+        [int]$Runs = 3,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,

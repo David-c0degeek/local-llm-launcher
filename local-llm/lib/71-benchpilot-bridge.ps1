@@ -173,7 +173,7 @@ function Invoke-BenchPilotLauncherFindBest {
         [string[]]$AllowedKvTypes,
         [int]$Budget = 30,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
-        [int]$Runs = 1,
+        [int]$Runs = 3,
         [switch]$Quick,
         [switch]$Deep,
         [switch]$Aggressive,

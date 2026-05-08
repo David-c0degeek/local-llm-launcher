@@ -18,6 +18,9 @@ entry is matched by `Get-BestLlamaCppConfig` using:
 - `vramGB` within +/- 1 GB
 - `tuner_version` when present
 
+Entries also record `contextTokens` as provenance for the resolved `num_ctx`;
+`contextKey` remains the launch-time match key.
+
 Entries must include an `overrides` object whose keys can be splatted into
 `Build-LlamaServerArgs`. The currently accepted tuning override keys are:
 
@@ -89,6 +92,7 @@ reader:
 - `benchpilot_profile_path`
 - `report_path`
 - `launcher_export_version`
+- `contextTokens`
 
 Expanded BenchPilot exports also store selection metadata and optional
 diagnostics:

@@ -536,6 +536,11 @@ BenchPilot writes a LocalBox-compatible result to
 `~/.local-llm/tuner/best-<key>.json`, and `Start-ClaudeWithLlamaCppModel
 -AutoBest` replays that saved profile.
 
+Standard catalog context aliases are `32k`, `64k`, `128k`, and `256k` unless a
+model explicitly lacks support. AutoBest profiles are context-aware: the saved
+entry records both `contextKey` and the resolved `contextTokens`, and launcher
+selection still requires the same context key.
+
 ```powershell
 # Tune q36plus at the 256k context preset, native llama.cpp, default budget.
 # Default goal is coding-agent: long-prefill end-to-end latency.
@@ -546,6 +551,9 @@ findbest q36plus -ContextKey 256k -Quick
 
 # Deep mode — normal phases, then finer local offload/batch/thread refinement
 findbest q36plus -ContextKey 256k -Deep
+
+# Default sampling is three runs per candidate; override when needed
+findbest q36plus -ContextKey 256k -Runs 5
 
 # Save both the fastest raw profile and a workstation-friendly balanced profile
 findbest q36plus -ContextKey 256k -Profile both
@@ -597,8 +605,10 @@ Waiting for llama-server...
 - `OK` / `OOM` / `FAIL` — candidate status. `OOM` means the trial exhausted
   memory; `FAIL` means startup or probing failed for another reason.
 - `pp` — prompt-processing / prefill throughput, in tokens/sec. This measures
-  how fast llama.cpp consumes the input prompt before generation starts.
+  how fast llama.cpp consumes the input prompt before generation starts. By
+  default this is the average across three samples for that candidate.
 - `tg` — text-generation throughput, in tokens/sec after generation starts.
+  This is also averaged across the candidate's samples.
 - `score` — the value BenchPilot is optimizing. With the default
   `-Optimize coding-agent`, this is effective end-to-end tokens/sec for a large
   coding-agent prompt plus a moderate generated reply, so higher is better.
@@ -711,9 +721,10 @@ Start-ClaudeWithLlamaCppModel -Key q36plus -ContextKey 256k -Mode native -AutoBe
 ```
 
 The launcher matches the saved entry on `(key, contextKey, mode, profile,
-prompt_length, quant, vramGB ± 1)` and a tuner-version stamp; on a miss it
-warns and falls through to defaults. Caller-supplied `-KvCacheK` / `-KvCacheV`
-/ `-ExtraArgs` always win over the saved values.
+prompt_length, quant, vramGB ± 1)` and a tuner-version stamp; `contextTokens`
+is recorded as provenance for the actual `num_ctx` used by the run. On a miss
+it warns and falls through to defaults. Caller-supplied `-KvCacheK` /
+`-KvCacheV` / `-ExtraArgs` always win over the saved values.
 
 Before handing an AutoBest llama.cpp session to Claude or Unshackled, LocalBox
 sends a tiny `/v1/messages` smoke request, including the same system prompt
