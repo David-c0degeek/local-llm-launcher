@@ -80,8 +80,9 @@ qcoder -Ctx 32k -Unshackled   # Qwen3-Coder @ 32k -> Unshackled
 q36p -Ctx 128k                # Qwen 3.6 Plus @ 128k → Claude Code
 qcoder -Ctx 256 -Quant iq4xs  # 256k coder context (4090 ceiling)
 llmdefault                    # whatever the catalog / settings / .llm-default says
-llm                           # interactive wizard (native selectable UI)
-llms                          # Spectre wizard, opt-in
+llm                           # interactive wizard (Spectre when available)
+llmc                          # native selectable wizard
+llms                          # Spectre wizard, explicit
 info                          # dashboard: VRAM fit, parser freshness, defaults
 info -Commands                # full LocalBox + BenchPilot command list
 ```
@@ -340,9 +341,9 @@ llmdefault                    Launch the configured default recipe/model
 llmdefaultunshackled          Same, via Unshackled
 llmdefaultcodex               Same, via Codex
 llmdefaultchat                Same, plain chat
-llm                           Guided wizard (native selectable UI)
-llmc                          Same native wizard, explicit alias
-llms                          Spectre wizard, opt-in
+llm                           Guided wizard (Spectre when available)
+llmc                          Native selectable wizard, explicit alias
+llms                          Spectre wizard, explicit alias
 info                          Dashboard
 info -Commands                Full LocalBox + BenchPilot command list
 llmdocs                       Quick reference
@@ -758,7 +759,8 @@ the usual manual KV-cache selection.
 
 ## Wizard
 
-`llm` launches the native selectable picker. It uses arrow keys + Enter, while
+`llm` launches the Spectre picker when `PwshSpectreConsole` is available. Use
+`llmc` for the native selectable picker; it uses arrow keys + Enter, while
 keeping number/letter shortcuts for fast selection.
 It walks: model → quant → backend → context → action → q8/kvcache → launch.
 Each step has a Back option (`0`/Escape in native, `[[Back]]` in Spectre); the
@@ -767,13 +769,16 @@ full exception trace to `~/.local-llm/wizard-errors.log` if anything throws,
 so a Spectre live-display refresh can't scroll the trace off screen. Inspect
 with `llmlogerr [-Lines 80]`; reset with `llmlogerrclear`.
 
-`llms` launches the Spectre wizard when `PwshSpectreConsole` is available.
-Set `LOCAL_LLM_USE_SPECTRE=1` to make `llm` use Spectre again. `llmc` remains
-an explicit native-picker alias.
+After a model is selected, the Spectre wizard waits briefly before drawing the
+next prompt and retries one fast-empty transition. Tune that guard with
+`LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS` (default `500`, max `5000`).
+
+`llms` launches the Spectre wizard explicitly. `llmc` remains an explicit
+native-picker alias.
 
 ```powershell
-$env:LOCAL_LLM_USE_SPECTRE = '1'  # opt llm back into Spectre
-$env:LOCAL_LLM_NO_SPECTRE = '1'   # disable Spectre everywhere
+$env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS = '750'
+$env:LOCAL_LLM_NO_SPECTRE = '1'   # disable Spectre everywhere / make llm use native
 ```
 
 ---
@@ -803,9 +808,10 @@ setups, so they stay.
   via `Set-LocalLLMSetting RequireAdvertisedTools $false`.
 - **Stale aliases after editing a parser** → `init -Stale` rebuilds only the
   aliases whose Modelfile content hash drifted.
-- **Spectre wizard crashed** → `llmlogerr` for the full trace; use `llm`
-  for the native picker or set `$env:LOCAL_LLM_NO_SPECTRE=1` to disable
-  Spectre everywhere.
+- **Spectre wizard crashed or stalls** → `llmlogerr` for the full trace; use
+  `llmc` for the native picker or set `$env:LOCAL_LLM_NO_SPECTRE=1` to disable
+  Spectre everywhere. If the next prompt appears too slowly after selecting a
+  model, raise `$env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS`.
 - **`bun` not on PATH** → only required for Unshackled launches.
   Install via `winget install Oven-sh.Bun`.
 

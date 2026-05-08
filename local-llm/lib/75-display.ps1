@@ -601,9 +601,9 @@ function Show-LocalBoxCommandReference {
 
     Write-Host ""
     Write-Host "LocalBox launcher and dashboard" -ForegroundColor Green
-    Write-CommandRow -Command "llm, llmmenu" -Description "Open the native selectable launcher wizard."
-    Write-CommandRow -Command "llmc" -Description "Alias for the native selectable launcher wizard."
-    Write-CommandRow -Command "llms" -Description "Open the Spectre launcher wizard when PwshSpectreConsole is available."
+    Write-CommandRow -Command "llm, llmmenu" -Description "Open the launcher wizard (Spectre when available)."
+    Write-CommandRow -Command "llmc" -Description "Open the native selectable launcher wizard."
+    Write-CommandRow -Command "llms" -Description "Open the Spectre launcher wizard explicitly."
     Write-CommandRow -Command "info [-All] [<model>]" -Description "Show the dashboard or model details."
     Write-CommandRow -Command "info -Commands" -Description "Show this LocalBox and BenchPilot command list."
     Write-CommandRow -Command "llminfo" -Description "Alias for info."
@@ -792,8 +792,9 @@ One function per model — flags select what to do.
   q36p -Q8                      Use q8 KV cache for higher quality
   q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
   llmdefault                    Launch the configured Default model
-  llm                           Guided wizard (native selectable UI)
-  llms                          Spectre wizard (opt-in)
+  llm                           Guided wizard (Spectre when available)
+  llmc                          Native selectable wizard
+  llms                          Spectre wizard (explicit)
 
 Flags
   -Ctx <name>     One of the model's contexts (e.g. 32k, 64k, 128k, 256k). Omit for default.

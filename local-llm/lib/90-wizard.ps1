@@ -1,6 +1,6 @@
 # Interactive wizard. Two implementations: a native selectable console one and
-# a Spectre.Console one. Start-LLMWizard defaults to the native picker; Spectre
-# remains available through llms or LOCAL_LLM_USE_SPECTRE=1.
+# a Spectre.Console one. Start-LLMWizard prefers Spectre when available; set
+# LOCAL_LLM_NO_SPECTRE=1 or use llmc to force the native picker.
 
 function Format-LLMContextLabel {
     param(
@@ -1767,17 +1767,63 @@ function Invoke-LLMWizardStep {
     param(
         [Parameter(Mandatory = $true)][scriptblock]$Action,
         [Parameter(Mandatory = $true)][string]$Context,
-        [object]$Default = $null
+        [object]$Default = $null,
+        [int]$RetryDelayMs = 0,
+        [switch]$RetryOnceOnNull
     )
 
+    $attempts = if ($RetryOnceOnNull) { 2 } else { 1 }
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        if ($attempt -gt 1 -and $RetryDelayMs -gt 0) {
+            Start-Sleep -Milliseconds $RetryDelayMs
+        }
+
+        $started = Get-Date
+        try {
+            $result = & $Action
+            $elapsedMs = [int](((Get-Date) - $started).TotalMilliseconds)
+            $fastNull = ($null -eq $result -and $RetryOnceOnNull -and $RetryDelayMs -gt 0 -and $elapsedMs -lt $RetryDelayMs)
+            if ($null -ne $result -or -not $fastNull -or $attempt -ge $attempts) {
+                return $result
+            }
+        }
+        catch {
+            Save-LocalLLMWizardError -ErrorRecord $_ -Context $Context
+            if ($RetryOnceOnNull -and $attempt -lt $attempts) {
+                if ($RetryDelayMs -gt 0) { Start-Sleep -Milliseconds $RetryDelayMs }
+                continue
+            }
+            Pause-Menu
+            return $Default
+        }
+    }
+
+    return $Default
+}
+
+function Get-LLMSpectrePromptCooldownMs {
+    $raw = $env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS
+    if ([string]::IsNullOrWhiteSpace($raw)) { return 500 }
+
     try {
-        return (& $Action)
+        $value = [int]$raw
+        if ($value -lt 0) { return 0 }
+        if ($value -gt 5000) { return 5000 }
+        return $value
     }
     catch {
-        Save-LocalLLMWizardError -ErrorRecord $_ -Context $Context
-        Pause-Menu
-        return $Default
+        return 500
     }
+}
+
+function Invoke-LLMSpectreTransitionCooldown {
+    param([string]$Message = 'Preparing next menu')
+
+    $ms = Get-LLMSpectrePromptCooldownMs
+    if ($ms -le 0) { return }
+
+    Write-Host ("{0}..." -f $Message) -ForegroundColor DarkGray
+    Start-Sleep -Milliseconds $ms
 }
 
 function Start-LLMWizardSpectre {
@@ -1810,6 +1856,7 @@ function Start-LLMWizardSpectre {
                 $useAutoBest = $false
                 $autoBestProfile = 'auto'
                 $saveAsDefault = $false
+                Invoke-LLMSpectreTransitionCooldown -Message 'Model selected'
                 $step = 'quant'
             }
 
@@ -1819,7 +1866,7 @@ function Start-LLMWizardSpectre {
 
                 $quantKey = Invoke-LLMWizardStep -Context "select-quant ($modelKey)" -Action {
                     Select-LLMQuantKeySpectre -ModelKey $modelKey
-                }
+                } -RetryOnceOnNull -RetryDelayMs (Get-LLMSpectrePromptCooldownMs)
                 if ($null -eq $quantKey)      { $step = 'model';   break }   # back
                 if ($quantKey -eq '__keep__') { $step = 'backend'; break }
                 try {
@@ -1838,7 +1885,7 @@ function Start-LLMWizardSpectre {
                 $def = Get-ModelDef -Key $modelKey
                 $picked = Invoke-LLMWizardStep -Context "select-backend ($modelKey)" -Action {
                     Select-LLMBackendSpectre -Def $def
-                }
+                } -RetryOnceOnNull -RetryDelayMs (Get-LLMSpectrePromptCooldownMs)
                 if ($null -eq $picked) {
                     $step = if ($def.ContainsKey("Quants")) { 'quant' } else { 'model' }
                     break
@@ -2009,7 +2056,7 @@ function llmlogerrclear {
 }
 
 function Test-LocalLLMWizardSpectreEnabled {
-    return ($env:LOCAL_LLM_USE_SPECTRE -eq '1' -and (Test-LocalLLMSpectreAvailable))
+    return (Test-LocalLLMSpectreAvailable)
 }
 
 function Start-LLMWizardSpectreExplicit {
