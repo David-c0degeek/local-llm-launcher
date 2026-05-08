@@ -56,6 +56,19 @@ function Find-LlamaPerplexityExe {
     return $null
 }
 
+function Find-LlamaPerplexityTurboquantExe {
+    # Searches for llama-perplexity.exe under the turboquant install root.
+    # The turboquant ZIP layout isn't fixed (releases sometimes nest under a
+    # version folder), so we glob recursively.
+    $root = Get-LlamaCppTurboquantInstallRoot
+    if (-not (Test-Path $root)) { return $null }
+
+    $hit = Get-ChildItem -Path $root -Filter 'llama-perplexity.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+
+    return $null
+}
+
 function Get-LlamaCppGpuVariant {
     # Returns 'cuda' | 'vulkan' | 'cpu' based on configured override or
     # auto-detection. CUDA is preferred when nvidia-smi works; vulkan covers
@@ -269,10 +282,41 @@ function Ensure-LlamaBenchExe {
 }
 
 function Ensure-LlamaPerplexityExe {
-    param([switch]$NonInteractive)
+    param(
+        [switch]$NonInteractive,
+        [ValidateSet('native','turboquant')][string]$Mode = 'native'
+    )
 
-    $existing = Find-LlamaPerplexityExe
+    if ($Mode -eq 'turboquant') {
+        $existing = Find-LlamaPerplexityTurboquantExe
+    } else {
+        $existing = Find-LlamaPerplexityExe
+    }
     if ($existing) { return $existing }
+
+    if ($Mode -eq 'turboquant' -and $NonInteractive) {
+        Install-LlamaServerTurboquant -Force | Out-Null
+        $installed = Find-LlamaPerplexityTurboquantExe
+        if ($installed) { return $installed }
+        return $null
+    }
+
+    if ($Mode -eq 'turboquant' -and -not $NonInteractive) {
+        Write-Host ""
+        Write-Host "llama-perplexity (turboquant) is not installed." -ForegroundColor Yellow
+        Write-Host "  Source: github.com/$(Get-LlamaCppTurboquantRepo)/releases/latest" -ForegroundColor DarkGray
+        Write-Host "  Target: $(Get-LlamaCppTurboquantInstallRoot)" -ForegroundColor DarkGray
+        $answer = (Read-Host "Download/reinstall turboquant llama.cpp tools now? [Y/n]").Trim().ToLowerInvariant()
+
+        if ($answer -in @("n", "no")) {
+            return $null
+        }
+    }
+
+    if ($Mode -eq 'turboquant') {
+        Install-LlamaServerTurboquant -Force | Out-Null
+        return (Find-LlamaPerplexityTurboquantExe)
+    }
 
     if ($NonInteractive) {
         Install-LlamaServerNative -Force | Out-Null
