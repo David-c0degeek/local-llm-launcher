@@ -228,6 +228,9 @@ lps                           # show running llama-server (port, pid, gguf path)
 lstop                         # stop it
 ```
 
+Use `llm-stop` (or `llmstop`) to stop both Ollama and llama.cpp without
+restarting either backend.
+
 llama.cpp is the path you want when:
 - You need a KV cache type Ollama doesn't expose (`turbo4`, `iq4_nl`).
 - You want explicit control over `--n-cpu-moe`, `--mlock`, `--no-mmap`.
@@ -324,6 +327,7 @@ One function per model. Flag-based:
 
 ```
 qcoder -Ctx fast -Unshackled  Code agent (Qwen3-Coder, 32k, Unshackled)
+qcoder -Ctx fast -Codex       Code agent (Qwen3-Coder, 32k, Codex)
 q36p -Ctx fast -Unshackled    General Qwen 3.6 agent (32k, Unshackled)
 dev -Ctx fast                 Smaller / faster (Devstral 24B, 32k)
 q36p -Ctx 128 -Unshackled     Big context (Qwen 3.6 Plus, 128k)
@@ -331,8 +335,9 @@ qcoder -Ctx 256 -Quant iq4xs  256k coder context (4090 ceiling — no -Q8)
 q36p -Chat                    Raw ollama chat, no Claude Code
 q36p -Q8                      Use q8 KV cache for higher quality
 q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
-llmdefault                    Launch the configured Default model
+llmdefault                    Launch the configured default recipe/model
 llmdefaultunshackled          Same, via Unshackled
+llmdefaultcodex               Same, via Codex
 llmdefaultchat                Same, plain chat
 llm                           Guided wizard
 llmc                          Wizard, Spectre bypass (force classic)
@@ -346,6 +351,7 @@ llm-update                    Update LocalBox + installed companion checkouts
 |------|--------|
 | `-Ctx <name>` | One of the model's context keys (`fast`, `deep`, `128`, `256`). Omit for default. |
 | `-Unshackled` | Use Unshackled instead of Claude Code. |
+| `-Codex` | Use OpenAI Codex instead of Claude Code. |
 | `-Chat` | Run plain `ollama run`, skip Claude Code entirely. |
 | `-Q8` | Set `OLLAMA_KV_CACHE_TYPE=q8_0` for this launch. Refused above the VRAM-derived `Q8KvMaxContext` ceiling — q8 KV at long context will OOM. |
 | `-Quant <name>` | Switch the model's selected GGUF quant. No launch — rebuilds the alias. |

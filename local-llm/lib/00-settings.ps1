@@ -75,6 +75,9 @@ function Import-LocalLLMConfig {
     if (-not $cfg.ContainsKey("BenchPilotMinimumVersion"))      { $cfg.BenchPilotMinimumVersion = "0.1.0" }
     if (-not $cfg.ContainsKey("LocalBoxRoot"))                  { $cfg.LocalBoxRoot = "" }
     if (-not $cfg.ContainsKey("UnshackledRoot"))                { $cfg.UnshackledRoot = "%USERPROFILE%\\.local-llm\\tools\\unshackled" }
+    if (-not $cfg.ContainsKey("CodexEnableSearch"))             { $cfg.CodexEnableSearch = $false }
+    if (-not $cfg.ContainsKey("CodexBypassApprovalsAndSandbox")) { $cfg.CodexBypassApprovalsAndSandbox = $true }
+    if (-not $cfg.ContainsKey("CodexStreamIdleTimeoutMs"))       { $cfg.CodexStreamIdleTimeoutMs = 10000000 }
 
     # Drop the obsolete docker-image setting if a stale settings.json or
     # catalog still carries it.

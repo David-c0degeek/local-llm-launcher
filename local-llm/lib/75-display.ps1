@@ -586,7 +586,7 @@ function Show-LocalBoxCommandReference {
     }
 
     Write-Host "LocalBox model commands" -ForegroundColor Green
-    Write-Host "  One function is generated for each configured model. Use -Ctx, -Chat, -Q8, -Strict, -Unshackled, and -Quant where supported." -ForegroundColor DarkGray
+    Write-Host "  One function is generated for each configured model. Use -Ctx, -Chat, -Codex, -Q8, -Strict, -Unshackled, and -Quant where supported." -ForegroundColor DarkGray
     foreach ($key in (@(Get-ModelKeys) | Sort-Object)) {
         $def = Get-ModelDef -Key $key
         $name = Get-ModelShortcutName -Def $def
@@ -608,8 +608,9 @@ function Show-LocalBoxCommandReference {
     Write-CommandRow -Command "llminfo" -Description "Alias for info."
     Write-CommandRow -Command "llmdocs, docs, llmhelp" -Description "Show the quick reference."
     Write-CommandRow -Command "reloadllm" -Description "Reload llm-models.json and regenerate model commands."
-    Write-CommandRow -Command "llmdefault" -Description "Launch the configured default model."
+    Write-CommandRow -Command "llmdefault" -Description "Launch the configured default recipe, or the default model when no recipe is saved."
     Write-CommandRow -Command "llmdefaultunshackled" -Description "Launch the default model through Unshackled."
+    Write-CommandRow -Command "llmdefaultcodex" -Description "Launch the default model through Codex."
     Write-CommandRow -Command "llmdefaultchat" -Description "Launch the default model as plain Ollama chat."
     Write-CommandRow -Command "llmlogerr, llmlogerrclear" -Description "Show or clear wizard error logs."
 
@@ -629,10 +630,10 @@ function Show-LocalBoxCommandReference {
     Write-Host "LocalBox runtime operations" -ForegroundColor Green
     Write-CommandRow -Command "ops" -Description "Show ollama ps."
     Write-CommandRow -Command "qkill" -Description "Unload Ollama models."
-    Write-CommandRow -Command "ostop" -Description "Restart/teardown Ollama according to LocalBox runtime rules."
+    Write-CommandRow -Command "ostop" -Description "Stop Ollama and leave it stopped."
     Write-CommandRow -Command "lps" -Description "Show llama-server status."
     Write-CommandRow -Command "lstop" -Description "Stop every llama-server.exe."
-    Write-CommandRow -Command "unloadall, llmstop" -Description "Free local model VRAM across Ollama and llama.cpp."
+    Write-CommandRow -Command "unloadall, llmstop, llm-stop" -Description "Free local model VRAM across Ollama and llama.cpp."
     Write-CommandRow -Command "ospeed" -Description "Run an Ollama throughput probe."
     Write-CommandRow -Command "obench" -Description "Show Ollama benchmark history."
 

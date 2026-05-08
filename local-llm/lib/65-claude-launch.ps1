@@ -433,6 +433,89 @@ function Invoke-UnshackledCli {
     & bun (Join-Path $root "src\entrypoints\cli.tsx") @CliArgs
 }
 
+function ConvertTo-CodexTomlString {
+    param([AllowEmptyString()][string]$Value)
+
+    $escaped = ([string]$Value) -replace '\\', '\\' -replace '"', '\"'
+    return '"' + $escaped + '"'
+}
+
+function Get-CodexCommonArgs {
+    $args = @()
+
+    if ($script:Cfg.Contains("CodexEnableSearch") -and [bool]$script:Cfg.CodexEnableSearch) {
+        $args += '--search'
+    }
+
+    $bypass = if ($script:Cfg.Contains("CodexBypassApprovalsAndSandbox")) {
+        [bool]$script:Cfg.CodexBypassApprovalsAndSandbox
+    } else {
+        $true
+    }
+    if ($bypass) {
+        $args += '--dangerously-bypass-approvals-and-sandbox'
+    }
+
+    return $args
+}
+
+function Start-CodexCli {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Model,
+        [string]$BaseUrl,
+        [int]$ContextTokens,
+        [int]$MaxOutputTokens
+    )
+
+    if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
+        throw "codex is not on PATH. Install with: npm install -g @openai/codex"
+    }
+
+    $args = @()
+
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+        $args += @('--oss', '--local-provider', 'ollama')
+    } else {
+        $providerId = 'localbox_llamacpp'
+        $idleMs = if ($script:Cfg.Contains("CodexStreamIdleTimeoutMs")) {
+            try { [int]$script:Cfg.CodexStreamIdleTimeoutMs } catch { 10000000 }
+        } else {
+            10000000
+        }
+
+        $args += @(
+            '-c', ('model_provider={0}' -f (ConvertTo-CodexTomlString $providerId)),
+            '-c', ('model_providers.{0}.name={1}' -f $providerId, (ConvertTo-CodexTomlString 'LocalBox llama.cpp')),
+            '-c', ('model_providers.{0}.base_url={1}' -f $providerId, (ConvertTo-CodexTomlString $BaseUrl)),
+            '-c', ('model_providers.{0}.wire_api="responses"' -f $providerId),
+            '-c', ('model_providers.{0}.stream_idle_timeout_ms={1}' -f $providerId, $idleMs)
+        )
+    }
+
+    if ($ContextTokens -gt 0) {
+        $args += @('-c', "model_context_window=$ContextTokens")
+    }
+    if ($MaxOutputTokens -gt 0) {
+        $args += @('-c', "model_max_output_tokens=$MaxOutputTokens")
+    }
+
+    $args += @('--model', $Model)
+    $args += @(Get-CodexCommonArgs)
+
+    Write-Host ""
+    Write-Host "Launching codex with $Model..." -ForegroundColor Cyan
+    if (-not [string]::IsNullOrWhiteSpace($BaseUrl)) {
+        Write-Host "  Base URL : $BaseUrl" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Provider : Ollama local provider" -ForegroundColor DarkGray
+    }
+    Write-Host "  Model    : $Model" -ForegroundColor DarkGray
+    Write-Host ""
+
+    & codex @args
+}
+
 function Start-ClaudeWithOllamaModel {
     param(
         [Parameter(Mandatory = $true)][string]$Model,
@@ -442,6 +525,7 @@ function Start-ClaudeWithOllamaModel {
         [switch]$UseQ8,
         [switch]$LimitTools,
         [switch]$Unshackled,
+        [switch]$Codex,
         [switch]$SkipToolCheck,
         [string[]]$ExtraUnshackledArgs
     )
@@ -486,6 +570,11 @@ function Start-ClaudeWithOllamaModel {
         Write-Host "Or set RequireAdvertisedTools=false in llm-models.json." -ForegroundColor Yellow
         Write-Host ""
 
+        return
+    }
+
+    if ($Codex) {
+        Start-CodexCli -Model $Model
         return
     }
 
@@ -593,6 +682,7 @@ function Start-ClaudeWithLlamaCppModel {
         [Nullable[bool]]$IncludeInlineToolSchemas,
         [switch]$LimitTools,
         [switch]$Unshackled,
+        [switch]$Codex,
         [switch]$Strict,
         [switch]$AutoBest,
         [switch]$AutoBestStrict,
@@ -775,6 +865,32 @@ function Start-ClaudeWithLlamaCppModel {
     catch {
         Stop-LlamaServer -Quiet
         throw
+    }
+
+    if ($Codex) {
+        try {
+            $contextTokens = Get-ModelContextValue -Def $def -ContextKey $ContextKey
+            $maxOutputTokens = if ($script:Cfg.Contains("LocalModelMaxOutputTokens")) {
+                try { [int]$script:Cfg.LocalModelMaxOutputTokens } catch { 0 }
+            } else {
+                0
+            }
+
+            Write-Host ""
+            Write-Host "Launching codex with $($def.Root) via llama.cpp ($Mode)..." -ForegroundColor Cyan
+            Write-Host "  Base URL : http://localhost:$port/v1" -ForegroundColor DarkGray
+            Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
+            Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+            Write-Host "  Port     : $port" -ForegroundColor DarkGray
+            Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray
+            Write-Host ""
+
+            Start-CodexCli -Model $def.Root -BaseUrl "http://localhost:$port/v1" -ContextTokens $contextTokens -MaxOutputTokens $maxOutputTokens
+        }
+        finally {
+            Stop-LlamaServer
+        }
+        return
     }
 
     Save-ClaudeEnvBackup

@@ -2,6 +2,13 @@
 
 Past-tense record of shipped changes.
 
+## 2026-05-08 - Codex target and default launch recipes
+
+- **`ostop` now leaves Ollama stopped.** It no longer restarts the Ollama app after teardown.
+- **`llm-stop`.** Added a hyphenated all-backend stop command alongside `llmstop` / `unloadall`.
+- **Codex launch target.** Model shortcuts and the wizard now support `-Codex` / `Codex` as a peer to Claude Code and Unshackled. Ollama launches use Codex's local Ollama provider; llama.cpp launches pass a custom OpenAI-compatible provider pointed at the selected `llama-server` `/v1` endpoint.
+- **Default launch recipes.** The wizard can save the selected model, target, backend, context, quant, strict/Q8 flags, llama.cpp mode, KV cache, and AutoBest profile into `DefaultLaunch` so `llmdefault` can replay the full recipe.
+
 ## 2026-05-07 - Suite updater, Unshackled cleanup
 
 ### Added

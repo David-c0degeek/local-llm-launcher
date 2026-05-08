@@ -193,7 +193,9 @@ function Select-LLMAction {
     $actions = if ($Backend -eq 'llamacpp') {
         @(
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
             [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
             [pscustomobject]@{ Key = "findbest"; Label = "Find best settings"; Description = "Auto-tune for this machine" },
             [pscustomobject]@{ Key = "resetbest"; Label = "Delete best settings"; Description = "Reset saved AutoBest config" },
             [pscustomobject]@{ Key = "setup"; Label = "Download GGUF only"; Description = "Resolve and cache the GGUF without launching" }
@@ -201,8 +203,10 @@ function Select-LLMAction {
     } else {
         @(
             [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
             [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
             [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" },
+            [pscustomobject]@{ Key = "setdefault"; Label = "Set llmdefault"; Description = "Save this model/profile/target as llmdefault" },
             [pscustomobject]@{ Key = "benchmark"; Label = "Benchmark"; Description = "Run ospeed for selected alias" },
             [pscustomobject]@{ Key = "setup"; Label = "Setup/create alias only"; Description = "Download/create selected alias" },
             [pscustomobject]@{ Key = "show"; Label = "Show ollama model info"; Description = "Run ollama show" }
@@ -223,6 +227,37 @@ function Select-LLMAction {
     }
 
     return $actions[$idx].Key
+}
+
+function Select-LLMDefaultTarget {
+    param([string]$Backend = 'ollama')
+
+    $targets = if ($Backend -eq 'llamacpp') {
+        @(
+            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
+            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" }
+        )
+    } else {
+        @(
+            [pscustomobject]@{ Key = "claude"; Label = "Claude Code"; Description = "Local model behind Claude Code" },
+            [pscustomobject]@{ Key = "codex"; Label = "Codex"; Description = "Local model behind OpenAI Codex" },
+            [pscustomobject]@{ Key = "unshackled"; Label = "Unshackled"; Description = "Local agent via Unshackled" },
+            [pscustomobject]@{ Key = "chat"; Label = "Ollama chat"; Description = "Plain ollama run" }
+        )
+    }
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "llmdefault target" `
+        -Items $targets `
+        -ZeroLabel "Back" `
+        -Label {
+        param($target, $i)
+        return "$($target.Label)  -  $($target.Description)"
+    }
+
+    if ($idx -lt 0) { return $null }
+    return $targets[$idx].Key
 }
 
 function Select-LLMBackend {
@@ -608,6 +643,9 @@ function Invoke-LlamaCppTunerWizardFlow {
         if ($launchAction -eq 'unshackled') {
             $launchArgs.Unshackled = $true
         }
+        if ($launchAction -eq 'codex') {
+            $launchArgs.Codex = $true
+        }
 
         Start-ClaudeWithLlamaCppModel @launchArgs
     }
@@ -743,6 +781,7 @@ function Select-LlamaCppLaunchSettingsMode {
 function Select-LlamaCppPostTuneLaunchAction {
     $items = @(
         [pscustomobject]@{ Key = 'claude'; Label = 'Claude Code'; Description = 'Local model behind Claude Code' },
+        [pscustomobject]@{ Key = 'codex'; Label = 'Codex'; Description = 'Local model behind OpenAI Codex' },
         [pscustomobject]@{ Key = 'unshackled'; Label = 'Unshackled';   Description = 'Local agent via Unshackled' }
     )
 
@@ -814,6 +853,13 @@ function Invoke-LLMSelection {
                     -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
             }
 
+            "codex" {
+                Start-ClaudeWithLlamaCppModel `
+                    -Key $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode `
+                    -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
+                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Codex
+            }
+
             "unshackled" {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
@@ -850,6 +896,10 @@ function Invoke-LLMSelection {
 
         "unshackled" {
             Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8 -Strict:$Strict
+        }
+
+        "codex" {
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Codex -UseQ8:$UseQ8 -Strict:$Strict
         }
 
         "claude" {
@@ -889,6 +939,7 @@ function Start-LLMWizardClassic {
     $kvV          = $null
     $useAutoBest  = $false
     $autoBestProfile = 'auto'
+    $saveAsDefault = $false
     $step         = 'model'
 
     while ($true) {
@@ -904,6 +955,7 @@ function Start-LLMWizardClassic {
                 $useStrict = $false
                 $useAutoBest = $false
                 $autoBestProfile = 'auto'
+                $saveAsDefault = $false
                 $step = 'quant'
             }
 
@@ -965,7 +1017,20 @@ function Start-LLMWizardClassic {
                     $step = if ($useStrict) { 'strict' } else { 'context' }
                     break
                 }
-                if ($action -in @("chat", "unshackled", "claude")) {
+
+                if ($action -eq "setdefault") {
+                    $target = Select-LLMDefaultTarget -Backend $backend
+                    if ([string]::IsNullOrWhiteSpace($target)) {
+                        $step = 'action'
+                        break
+                    }
+                    $action = $target
+                    $saveAsDefault = $true
+                } else {
+                    $saveAsDefault = $false
+                }
+
+                if ($action -in @("chat", "unshackled", "claude", "codex")) {
                     if ($backend -eq 'llamacpp') {
                         $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {
@@ -1015,15 +1080,24 @@ function Start-LLMWizardClassic {
 
             'launch' {
                 try {
-                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
-                        -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
+                    if ($saveAsDefault) {
+                        Save-LLMDefaultLaunch -ModelKey $modelKey -ContextKey $contextKey -Action $action `
+                            -Backend $backend -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict `
+                            -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
+                        Pause-Menu
+                    } else {
+                        Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
+                            -Backend $backend -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
+                    }
                 }
                 catch {
                     Write-Host "Command failed." -ForegroundColor Red
                     Write-Host $_.Exception.Message -ForegroundColor DarkGray
                     Pause-Menu
                 }
+                $saveAsDefault = $false
                 $step = 'model'
             }
         }
@@ -1150,7 +1224,9 @@ function Select-LLMActionSpectre {
     $labelMap = if ($Backend -eq 'llamacpp') {
         [ordered]@{
             "Claude Code  -  Local model behind Claude Code" = 'claude'
+            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
             "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+            "Set llmdefault - Save this model/profile/target" = 'setdefault'
             "Find best settings - Auto-tune for this machine" = 'findbest'
             "Delete best settings - Reset saved AutoBest config" = 'resetbest'
             "Setup only   -  Download GGUF without launching" = 'setup'
@@ -1159,8 +1235,10 @@ function Select-LLMActionSpectre {
     } else {
         [ordered]@{
             "Claude Code  -  Local model behind Claude Code" = 'claude'
+            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
             "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
             "Ollama chat  -  Plain ollama run"               = 'chat'
+            "Set llmdefault - Save this model/profile/target" = 'setdefault'
             "Benchmark    -  Run ospeed for selected alias"  = 'benchmark'
             "Setup only   -  (Re)build alias"                = 'setup'
             "Show         -  Run ollama show"                = 'show'
@@ -1169,6 +1247,34 @@ function Select-LLMActionSpectre {
     }
 
     $chosen = Read-SpectreSelection -Message "Select action" -Choices @($labelMap.Keys) -PageSize 10
+    if ($null -eq $chosen) { return $null }
+    $value = $labelMap[$chosen]
+
+    if ($value -eq '__back__') { return $null }
+    return $value
+}
+
+function Select-LLMDefaultTargetSpectre {
+    param([string]$Backend = 'ollama')
+
+    $labelMap = if ($Backend -eq 'llamacpp') {
+        [ordered]@{
+            "Claude Code  -  Local model behind Claude Code" = 'claude'
+            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
+            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+            "[[Back]]"                                      = '__back__'
+        }
+    } else {
+        [ordered]@{
+            "Claude Code  -  Local model behind Claude Code" = 'claude'
+            "Codex       -  Local model behind OpenAI Codex"  = 'codex'
+            "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
+            "Ollama chat  -  Plain ollama run"               = 'chat'
+            "[[Back]]"                                      = '__back__'
+        }
+    }
+
+    $chosen = Read-SpectreSelection -Message "llmdefault target" -Choices @($labelMap.Keys) -PageSize 7
     if ($null -eq $chosen) { return $null }
     $value = $labelMap[$chosen]
 
@@ -1208,6 +1314,7 @@ function Select-LlamaCppLaunchSettingsModeSpectre {
 function Select-LlamaCppPostTuneLaunchActionSpectre {
     $choices = [ordered]@{
         "Claude Code  -  Local model behind Claude Code" = 'claude'
+        "Codex       -  Local model behind OpenAI Codex"  = 'codex'
         "Unshackled   -  Local agent via Unshackled"     = 'unshackled'
         "[[Cancel]]"                                    = '__cancel__'
     }
@@ -1480,6 +1587,7 @@ function Start-LLMWizardSpectre {
     $kvV          = $null
     $useAutoBest  = $false
     $autoBestProfile = 'auto'
+    $saveAsDefault = $false
     $step         = 'model'
 
     while ($true) {
@@ -1496,6 +1604,7 @@ function Start-LLMWizardSpectre {
                 $useStrict = $false
                 $useAutoBest = $false
                 $autoBestProfile = 'auto'
+                $saveAsDefault = $false
                 $step = 'quant'
             }
 
@@ -1573,7 +1682,23 @@ function Start-LLMWizardSpectre {
                     $step = if ($useStrict) { 'strict' } else { 'context' }
                     break
                 }
-                if ($action -in @("chat", "unshackled", "claude")) {
+
+                if ($action -eq "setdefault") {
+                    $capturedBackend = $backend
+                    $target = Invoke-LLMWizardStep -Context 'llmdefault-target' -Action {
+                        Select-LLMDefaultTargetSpectre -Backend $capturedBackend
+                    }
+                    if ([string]::IsNullOrWhiteSpace($target)) {
+                        $step = 'action'
+                        break
+                    }
+                    $action = $target
+                    $saveAsDefault = $true
+                } else {
+                    $saveAsDefault = $false
+                }
+
+                if ($action -in @("chat", "unshackled", "claude", "codex")) {
                     if ($backend -eq 'llamacpp') {
                         $step = if (Test-LlamaCppWizardAutoBestAvailable -ModelKey $modelKey -ContextKey $contextKey -Mode $llamaCppMode) { 'llamacppsettings' } else { 'kvcache' }
                     } else {
@@ -1633,14 +1758,23 @@ function Start-LLMWizardSpectre {
 
             'launch' {
                 try {
-                    Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
-                        -Backend $backend -LlamaCppMode $llamaCppMode `
-                        -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -UseSpectrePrompts
+                    if ($saveAsDefault) {
+                        Save-LLMDefaultLaunch -ModelKey $modelKey -ContextKey $contextKey -Action $action `
+                            -Backend $backend -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict `
+                            -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
+                        Pause-Menu
+                    } else {
+                        Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
+                            -Backend $backend -LlamaCppMode $llamaCppMode `
+                            -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -UseSpectrePrompts
+                    }
                 }
                 catch {
                     Save-LocalLLMWizardError -ErrorRecord $_ -Context "invoke ($modelKey/$contextKey/$action/$backend/strict=$useStrict)"
                     Pause-Menu
                 }
+                $saveAsDefault = $false
                 $step = 'model'
             }
         }

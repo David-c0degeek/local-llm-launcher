@@ -155,9 +155,6 @@ function Teardown-Ollama {
             Remove-ModelFiles -Key $key
         }
     }
-
-    Start-OllamaApp
-    Wait-Ollama
 }
 
 function init {

@@ -17,3 +17,4 @@ function bp     { bpstatus }
 # llama-server.exe. Neither backend is restarted afterwards.
 function unloadall { Unload-LocalLLM }
 function llmstop   { Unload-LocalLLM }
+function llm-stop  { Unload-LocalLLM }
