@@ -12,7 +12,8 @@ function Invoke-ModelShortcut {
         [switch]$Codex,
         [switch]$Chat,
         [switch]$Strict,
-        [string[]]$ExtraUnshackledArgs
+        [string[]]$ExtraUnshackledArgs,
+        [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
@@ -44,14 +45,23 @@ function Invoke-ModelShortcut {
         }
     }
 
-    $modelName = if ($Strict) {
+    # DryRun resolves the alias name without rebuilding the Modelfile (which
+    # would create a side-effecting `ollama create`). Real launches still call
+    # Ensure-Model* so a stale or missing alias is rebuilt on the spot.
+    $modelName = if ($DryRun) {
+        if ($Strict) {
+            Get-ModelStrictAliasName -Def $def
+        } else {
+            Get-ModelAliasName -Def $def -ContextKey $ContextKey
+        }
+    } elseif ($Strict) {
         Ensure-ModelStrictAlias -Key $Key
     } else {
         Ensure-ModelAlias -Key $Key -ContextKey $ContextKey
     }
 
     if ($Chat) {
-        Start-OllamaChat -Model $modelName -UseQ8:$UseQ8
+        Start-OllamaChat -Model $modelName -UseQ8:$UseQ8 -DryRun:$DryRun
         return
     }
 
@@ -75,6 +85,7 @@ function Invoke-ModelShortcut {
         LimitTools     = [bool]$def.LimitTools
         Unshackled     = $Unshackled
         Codex          = $Codex
+        DryRun         = $DryRun
     }
 
     if ($def.Contains("IncludeInlineToolSchemas")) {
@@ -160,7 +171,9 @@ function Register-ModelShortcuts {
                     [switch]$Codex,
                     [switch]$Chat,
                     [switch]$Q8,
-                    [switch]$Strict
+                    [switch]$Strict,
+                    [Alias('WhatIf')]
+                    [switch]$DryRun
                 )
 
                 if ($Quant) {
@@ -168,7 +181,7 @@ function Register-ModelShortcuts {
                     return
                 }
 
-                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -UseQ8:$Q8 -Unshackled:$Unshackled -Codex:$Codex -Chat:$Chat -Strict:$Strict
+                Invoke-ModelShortcut -Key $k -ContextKey $Ctx -UseQ8:$Q8 -Unshackled:$Unshackled -Codex:$Codex -Chat:$Chat -Strict:$Strict -DryRun:$DryRun
             }.GetNewClosure())
     }
 
@@ -365,16 +378,19 @@ function Format-LLMDefaultLaunchSummary {
 }
 
 function Invoke-LLMDefaultLaunch {
-    param([switch]$Strict)
+    param(
+        [switch]$Strict,
+        [switch]$DryRun
+    )
 
     if (-not $script:Cfg.Contains("DefaultLaunch") -or -not $script:Cfg.DefaultLaunch) {
-        Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Strict:$Strict
+        Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Strict:$Strict -DryRun:$DryRun
         return
     }
 
     $workspace = Find-WorkspaceDefaultModelKey
     if ($workspace) {
-        Invoke-ModelShortcut -Key $workspace -ContextKey "" -Strict:$Strict
+        Invoke-ModelShortcut -Key $workspace -ContextKey "" -Strict:$Strict -DryRun:$DryRun
         return
     }
 
@@ -382,7 +398,7 @@ function Invoke-LLMDefaultLaunch {
     $modelKey = [string]$launch.ModelKey
     $def = Get-ModelDef -Key $modelKey
 
-    if ($def.ContainsKey("Quants") -and $launch.Contains("Quant") -and -not [string]::IsNullOrWhiteSpace([string]$launch.Quant)) {
+    if (-not $DryRun -and $def.ContainsKey("Quants") -and $launch.Contains("Quant") -and -not [string]::IsNullOrWhiteSpace([string]$launch.Quant)) {
         Set-ModelQuantForSelectedLaunch -ModelKey $modelKey -QuantKey ([string]$launch.Quant)
     }
 
@@ -404,25 +420,38 @@ function Invoke-LLMDefaultLaunch {
     Invoke-LLMSelection -ModelKey $modelKey -ContextKey $contextKey -Action $action `
         -Backend $backend -LlamaCppMode $llamaCppMode `
         -KvCacheK $kvK -KvCacheV $kvV -UseQ8:$useQ8 -Strict:$useStrict `
-        -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile
+        -UseAutoBest:$useAutoBest -AutoBestProfile $autoBestProfile -DryRun:$DryRun
 }
 
 function llmdefault {
     [CmdletBinding()]
-    param([switch]$Strict)
-    Invoke-LLMDefaultLaunch -Strict:$Strict
+    param(
+        [switch]$Strict,
+        [Alias('WhatIf')][switch]$DryRun
+    )
+    Invoke-LLMDefaultLaunch -Strict:$Strict -DryRun:$DryRun
 }
 
 function llmdefaultunshackled {
     [CmdletBinding()]
-    param([switch]$Strict)
-    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Unshackled -Strict:$Strict
+    param(
+        [switch]$Strict,
+        [Alias('WhatIf')][switch]$DryRun
+    )
+    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Unshackled -Strict:$Strict -DryRun:$DryRun
 }
 
 function llmdefaultcodex {
     [CmdletBinding()]
-    param([switch]$Strict)
-    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Codex -Strict:$Strict
+    param(
+        [switch]$Strict,
+        [Alias('WhatIf')][switch]$DryRun
+    )
+    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Codex -Strict:$Strict -DryRun:$DryRun
 }
 
-function llmdefaultchat { Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Chat }
+function llmdefaultchat {
+    [CmdletBinding()]
+    param([Alias('WhatIf')][switch]$DryRun)
+    Invoke-ModelShortcut -Key (Get-DefaultModelKey) -ContextKey "" -Chat -DryRun:$DryRun
+}

@@ -1,0 +1,19 @@
+{
+  "MinOllamaVersion": "0.21.0",
+  "Default": "qcoder30",
+  "KeepAlive": "-1",
+  "OllamaAppPath": "%LOCALAPPDATA%\\Programs\\Ollama\\ollama app.exe",
+  "OllamaCommunityRoot": "%USERPROFILE%\\.ollama-community",
+  "RequireAdvertisedTools": true,
+  "NoThinkProxyPort": 11435,
+  "NoThinkProxyRequiredVersion": "1.0.0",
+  "LlamaCppPort": 8080,
+  "LlamaCppServerPath": "%USERPROFILE%\\.local-llm\\llama-cpp\\llama-server.exe",
+  "LlamaCppTurboquantRoot": "%USERPROFILE%\\.local-llm\\llama-cpp-turboquant",
+  "LlamaCppTurboquantRepo": "TheTom/llama-cpp-turboquant",
+  "LlamaCppGgufRoot": "%USERPROFILE%\\.local-llm\\gguf",
+  "LlamaCppDefaultMode": "native",
+  "LlamaCppHealthCheckTimeoutSec": 300,
+  "LlamaCppCoexistOllama": false,
+  "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,ToolSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop"
+}

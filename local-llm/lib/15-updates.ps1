@@ -341,3 +341,183 @@ function llmupdate {
 
     llm-update -DryRun:$DryRun
 }
+
+function Get-LocalLLMDeployedProxyPath {
+    return Join-Path $HOME '.ollama-proxy\no-think-proxy.py'
+}
+
+function Get-LocalLLMRepoProxyPath {
+    # The proxy source-of-truth alongside the launcher checkout. Walk up from
+    # the profile root until we find ../ollama-proxy/no-think-proxy.py.
+    $root = Resolve-LocalBoxRoot
+    if ([string]::IsNullOrWhiteSpace($root)) { return $null }
+    $candidate = Join-Path $root 'ollama-proxy\no-think-proxy.py'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    return $null
+}
+
+function Get-LocalLLMDeployedProxyVersion {
+    # Returns the deployed proxy's __version__ via `python no-think-proxy.py
+    # --version`. $null when the proxy or python is missing, or the check
+    # fails for any reason (treated as "unknown" by callers).
+    [CmdletBinding()]
+    param([string]$ProxyPath)
+
+    if ([string]::IsNullOrWhiteSpace($ProxyPath)) {
+        $ProxyPath = Get-LocalLLMDeployedProxyPath
+    }
+
+    if (-not (Test-Path -LiteralPath $ProxyPath)) { return $null }
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) { return $null }
+
+    try {
+        $output = & $python.Source $ProxyPath --version 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $line = ($output | Select-Object -First 1)
+        if ([string]::IsNullOrWhiteSpace($line)) { return $null }
+        return $line.Trim()
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-LocalLLMProxyVersion {
+    # Compare the deployed proxy version against the launcher's required
+    # version (defaults.json -> NoThinkProxyRequiredVersion). Returns a status
+    # hashtable; never throws. Emits a single yellow warning on mismatch.
+    [CmdletBinding()]
+    param([switch]$Quiet)
+
+    $required = if ($script:Cfg -and $script:Cfg.Contains('NoThinkProxyRequiredVersion')) {
+        [string]$script:Cfg.NoThinkProxyRequiredVersion
+    } else {
+        $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($required)) {
+        return @{ Status = 'no-pin'; Required = $null; Deployed = $null }
+    }
+
+    $deployed = Get-LocalLLMDeployedProxyVersion
+    if ([string]::IsNullOrWhiteSpace($deployed)) {
+        if (-not $Quiet) {
+            $deployedPath = Get-LocalLLMDeployedProxyPath
+            $msg = ("no-think proxy version unknown (deployed copy at {0} did not respond to --version). " +
+                "Required: {1}. Run Update-LocalLLMProxy or re-run install.ps1.") -f $deployedPath, $required
+            Write-Warning $msg
+        }
+        return @{ Status = 'unknown'; Required = $required; Deployed = $null }
+    }
+
+    if ($deployed -eq $required) {
+        return @{ Status = 'ok'; Required = $required; Deployed = $deployed }
+    }
+
+    if (-not $Quiet) {
+        $msg = ("no-think proxy version mismatch: deployed={0}, required={1}. " +
+            "Wire-format may have changed. Run Update-LocalLLMProxy to refresh.") -f $deployed, $required
+        Write-Warning $msg
+    }
+    return @{ Status = 'mismatch'; Required = $required; Deployed = $deployed }
+}
+
+function Update-LocalLLMProxy {
+    # Copy the repo's no-think-proxy.py over the deployed copy. No-op when the
+    # deployed copy is a symlink (it already points at the repo).
+    [CmdletBinding()]
+    param([switch]$Force)
+
+    $deployed = Get-LocalLLMDeployedProxyPath
+    $source = Get-LocalLLMRepoProxyPath
+    if (-not $source) {
+        throw "Cannot locate ollama-proxy\no-think-proxy.py in the launcher repo. Set LOCALBOX_ROOT or re-run install.ps1."
+    }
+
+    # Symlink deployments stay in sync automatically.
+    $item = Get-Item -LiteralPath $deployed -Force -ErrorAction SilentlyContinue
+    if ($item -and $item.LinkType -eq 'SymbolicLink') {
+        Write-Host "Deployed proxy is a symlink to: $($item.Target). Nothing to copy." -ForegroundColor DarkGray
+        return @{ Status = 'symlink'; Deployed = $deployed; Source = $source }
+    }
+
+    if ((Test-Path -LiteralPath $deployed) -and -not $Force) {
+        $deployedHash = (Get-FileHash -LiteralPath $deployed -Algorithm SHA256).Hash
+        $sourceHash   = (Get-FileHash -LiteralPath $source   -Algorithm SHA256).Hash
+        if ($deployedHash -eq $sourceHash) {
+            Write-Host "Deployed proxy is already up to date: $deployed" -ForegroundColor DarkGray
+            return @{ Status = 'up-to-date'; Deployed = $deployed; Source = $source }
+        }
+    }
+
+    $deployedDir = Split-Path -Parent $deployed
+    if (-not (Test-Path -LiteralPath $deployedDir)) {
+        New-Item -ItemType Directory -Path $deployedDir | Out-Null
+    }
+
+    Copy-Item -LiteralPath $source -Destination $deployed -Force
+    Write-Host "Updated no-think proxy: $deployed (from $source)" -ForegroundColor Green
+    return @{ Status = 'updated'; Deployed = $deployed; Source = $source }
+}
+
+function Migrate-LocalLLMConfig {
+    # One-shot migration to the defaults.json / llm-models.json split. Looks at
+    # the deployed catalog (the file Import-LocalLLMConfig reads); if it still
+    # carries the legacy top-level scalars and a defaults.json doesn't yet exist
+    # next to it, splits them out. Idempotent: returns 'noop' when nothing
+    # needs doing.
+    [CmdletBinding()]
+    param([switch]$WhatIf, [switch]$Quiet)
+
+    $catalogPath = $script:LocalLLMConfigPath
+    $defaultsPath = Get-LocalLLMDefaultsPath
+
+    if (-not (Test-Path -LiteralPath $catalogPath)) {
+        if (-not $Quiet) { Write-Host "Catalog not found: $catalogPath" -ForegroundColor DarkGray }
+        return 'noop'
+    }
+
+    $catalog = Get-Content -Raw -Path $catalogPath | ConvertFrom-Json -AsHashtable
+
+    $legacy = [ordered]@{}
+    foreach ($key in @($catalog.Keys)) {
+        if ($key -in @('Models', 'CommandAliases')) { continue }
+        $legacy[$key] = $catalog[$key]
+    }
+
+    if ($legacy.Count -eq 0) {
+        if (-not $Quiet) { Write-Host "Catalog is already in pure-data shape." -ForegroundColor DarkGray }
+        return 'noop'
+    }
+
+    if (Test-Path -LiteralPath $defaultsPath) {
+        if (-not $Quiet) {
+            Write-Warning ("defaults.json already exists; refusing to overwrite. Move conflicting keys " +
+                "from $catalogPath into $defaultsPath manually, then delete them from the catalog.")
+        }
+        return 'conflict'
+    }
+
+    if ($WhatIf) {
+        Write-Host "Would move these keys from $catalogPath to $defaultsPath :" -ForegroundColor Cyan
+        foreach ($k in $legacy.Keys) { Write-Host "  $k" -ForegroundColor DarkGray }
+        return 'pending'
+    }
+
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($defaultsPath, ($legacy | ConvertTo-Json -Depth 8), $utf8)
+
+    $newCatalog = [ordered]@{}
+    if ($catalog.Contains('Models'))         { $newCatalog['Models']         = $catalog['Models'] }
+    if ($catalog.Contains('CommandAliases')) { $newCatalog['CommandAliases'] = $catalog['CommandAliases'] }
+
+    [System.IO.File]::WriteAllText($catalogPath, ($newCatalog | ConvertTo-Json -Depth 32), $utf8)
+
+    if (-not $Quiet) {
+        Write-Host "Migrated: moved $($legacy.Count) launcher setting(s) from $catalogPath to $defaultsPath" -ForegroundColor Green
+    }
+
+    return 'migrated'
+}

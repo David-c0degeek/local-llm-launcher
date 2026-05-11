@@ -527,7 +527,8 @@ function Start-ClaudeWithOllamaModel {
         [switch]$Unshackled,
         [switch]$Codex,
         [switch]$SkipToolCheck,
-        [string[]]$ExtraUnshackledArgs
+        [string[]]$ExtraUnshackledArgs,
+        [switch]$DryRun
     )
 
     if ([string]::IsNullOrWhiteSpace($Tools)) {
@@ -541,6 +542,73 @@ function Start-ClaudeWithOllamaModel {
     # ToolSearch normally.
     if ($null -eq $IncludeInlineToolSchemas) {
         $IncludeInlineToolSchemas = [bool]$LimitTools
+    }
+
+    if ($DryRun) {
+        $keepThinking = ($ThinkingPolicy -eq 'keep')
+        $baseUrl = if ($keepThinking) {
+            'http://localhost:11434'
+        } else {
+            "http://localhost:$($script:NoThinkProxyPort)"
+        }
+
+        $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
+
+        $launchArgs = if ($LimitTools) {
+            @('--dangerously-skip-permissions', '--tools', $Tools, '--append-system-prompt', $systemPrompt)
+        }
+        else {
+            @('--dangerously-skip-permissions', '--append-system-prompt', $systemPrompt)
+        }
+
+        $title = if ($Codex) {
+            'codex via Ollama'
+        } elseif ($Unshackled) {
+            'unshackled via Ollama'
+        } else {
+            'claude via Ollama'
+        }
+
+        $env = if ($Codex) {
+            [ordered]@{}
+        } else {
+            Get-LocalLLMClaudeEnvSnapshot -BaseUrl $baseUrl -Model $Model -KeepThinking $keepThinking -AuthToken 'ollama'
+        }
+
+        $launchExe = if ($Unshackled) { 'unshackled' } elseif ($Codex) { 'codex' } else { 'claude' }
+        $launchExeArgs = if ($Codex) {
+            @()
+        } elseif ($Unshackled) {
+            @($launchArgs)
+        } else {
+            @('--model', $Model) + $launchArgs
+        }
+
+        $thinkingLabel = if ($keepThinking) {
+            'kept (direct to Ollama)'
+        } else {
+            "stripped via no-think-proxy:$($script:NoThinkProxyPort)"
+        }
+
+        $toolsLabel = if ($LimitTools) { "limited ($Tools)" } else { 'all' }
+        $kvNote = "Ollama backend would restart with OLLAMA_KV_CACHE_TYPE=$(if ($UseQ8) { 'q8_0' } else { 'default' })"
+
+        $plan = @{
+            Title       = $title
+            Backend     = 'ollama'
+            Model       = $Model
+            BaseUrl     = $baseUrl
+            HealthCheck = 'http://localhost:11434/api/tags'
+            Tools       = $toolsLabel
+            Thinking    = $thinkingLabel
+            Env         = $env
+            LaunchExe   = $launchExe
+            LaunchArgs  = $launchExeArgs
+            Notes       = @($kvNote)
+        }
+
+        Show-LocalLLMLaunchPlan -Plan $plan
+        return
     }
 
     Stop-OllamaModels
@@ -648,8 +716,24 @@ function Start-ClaudeWithOllamaModel {
 function Start-OllamaChat {
     param(
         [Parameter(Mandatory = $true)][string]$Model,
-        [switch]$UseQ8
+        [switch]$UseQ8,
+        [switch]$DryRun
     )
+
+    if ($DryRun) {
+        $kvNote = "Ollama backend would restart with OLLAMA_KV_CACHE_TYPE=$(if ($UseQ8) { 'q8_0' } else { 'default' })"
+        $plan = @{
+            Title      = 'ollama chat (REPL)'
+            Backend    = 'ollama'
+            Model      = $Model
+            BaseUrl    = 'http://localhost:11434'
+            LaunchExe  = 'ollama'
+            LaunchArgs = @('run', $Model)
+            Notes      = @($kvNote)
+        }
+        Show-LocalLLMLaunchPlan -Plan $plan
+        return
+    }
 
     Stop-OllamaModels
     Stop-OllamaApp
@@ -688,7 +772,8 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$AutoBestStrict,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
-        [string[]]$ExtraUnshackledArgs
+        [string[]]$ExtraUnshackledArgs,
+        [switch]$DryRun
     )
 
     $def = Get-ModelDef -Key $Key
@@ -707,16 +792,31 @@ function Start-ClaudeWithLlamaCppModel {
 
     # Avoid double-loading on a single GPU unless the user opted into coexistence.
     $coexist = if ($script:Cfg.Contains('LlamaCppCoexistOllama')) { [bool]$script:Cfg.LlamaCppCoexistOllama } else { $false }
-    if (-not $coexist) {
+    if (-not $DryRun -and -not $coexist) {
         Stop-OllamaModels
         Stop-OllamaApp
     }
 
     # Stop any prior llama-server we own.
-    Stop-LlamaServer -Quiet
+    if (-not $DryRun) {
+        Stop-LlamaServer -Quiet
+    }
 
-    # Resolve GGUF (downloads on demand; reuses Ollama copy when available).
-    $ggufPath = Get-ModelGgufPath -Key $Key -Def $def -Backend llamacpp
+    # Resolve GGUF. Real launch downloads on demand and reuses an Ollama copy
+    # when available; DryRun only inspects the expected path so we don't pull
+    # gigabytes for a preview.
+    $dryRunGgufNote = $null
+    if ($DryRun) {
+        $folder = Join-Path $script:Cfg.LlamaCppGgufRoot $def.Root
+        $fileName = Get-ModelFileName -Def $def
+        $ggufPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $fileName
+        if (-not (Test-Path -LiteralPath $ggufPath)) {
+            $dryRunGgufNote = "GGUF not present locally; a real launch would download from $($def.Repo)/$fileName"
+        }
+    }
+    else {
+        $ggufPath = Get-ModelGgufPath -Key $Key -Def $def -Backend llamacpp
+    }
 
     # Pick a free port from the configured default.
     $defaultPort = if ($script:Cfg.Contains('LlamaCppPort')) { [int]$script:Cfg.LlamaCppPort } else { 8080 }
@@ -827,10 +927,119 @@ function Start-ClaudeWithLlamaCppModel {
     $serverArgs = Build-LlamaServerArgs @buildParams
 
     # Resolve the server binary based on mode (upstream vs turboquant fork).
-    $serverPath = if ($Mode -eq 'turboquant') {
-        Ensure-LlamaServerTurboquant
-    } else {
-        Ensure-LlamaServerNative
+    # DryRun must not trigger an install — Find-* returns $null if absent.
+    $dryRunServerNote = $null
+    if ($DryRun) {
+        $serverPath = if ($Mode -eq 'turboquant') {
+            try { Find-TurboquantServerExe } catch { $null }
+        } else {
+            Find-LlamaServerExe
+        }
+        if (-not $serverPath) {
+            $serverPath = '<not installed>'
+            $dryRunServerNote = "llama-server ($Mode) is not installed; a real launch would install it first"
+        }
+    }
+    else {
+        $serverPath = if ($Mode -eq 'turboquant') {
+            Ensure-LlamaServerTurboquant
+        } else {
+            Ensure-LlamaServerNative
+        }
+    }
+
+    if ($DryRun) {
+        $thinking = if ($thinkingPolicy -eq 'keep') {
+            'kept (direct to llama-server)'
+        } else {
+            "stripped via no-think-proxy:$($script:NoThinkProxyPort)"
+        }
+
+        $baseUrl = if ($thinkingPolicy -eq 'keep') {
+            "http://localhost:$port"
+        } else {
+            "http://localhost:$($script:NoThinkProxyPort)"
+        }
+
+        $systemPrompt = Get-LocalModelSystemPrompt -IncludeInlineToolSchemas:$IncludeInlineToolSchemas
+
+        $launchArgs = if ($LimitTools) {
+            @('--dangerously-skip-permissions', '--tools', $Tools, '--append-system-prompt', $systemPrompt)
+        }
+        else {
+            @('--dangerously-skip-permissions', '--append-system-prompt', $systemPrompt)
+        }
+
+        $title = if ($Codex) {
+            "codex via llama.cpp ($Mode)"
+        } elseif ($Unshackled) {
+            "unshackled via llama.cpp ($Mode)"
+        } else {
+            "claude via llama.cpp ($Mode)"
+        }
+
+        $env = if ($Codex) {
+            [ordered]@{}
+        } else {
+            Get-LocalLLMClaudeEnvSnapshot -BaseUrl $baseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep')
+        }
+
+        $launchExe = if ($Unshackled) { 'unshackled' } elseif ($Codex) { 'codex' } else { 'claude' }
+        $launchExeArgs = if ($Codex) {
+            @()
+        } elseif ($Unshackled) {
+            @($launchArgs)
+        } else {
+            @('--model', $def.Root) + $launchArgs
+        }
+
+        $contextTokens = Get-ModelContextValue -Def $def -ContextKey $ContextKey
+        $quantLabel    = if ($def.Contains('Quant')) { [string]$def.Quant } else { $null }
+        $parserLabel   = if ($def.Contains('Parser') -and -not [string]::IsNullOrWhiteSpace([string]$def.Parser)) { [string]$def.Parser } else { 'none' }
+        $vramSize      = if ($quantLabel) { Get-QuantSizeGB -Def $def -QuantKey $quantLabel } else { $null }
+        $vramInfo      = Get-LocalLLMVRAMInfo
+        $fit           = if ($quantLabel) { Get-QuantFitClass -Def $def -QuantKey $quantLabel } else { '' }
+        $toolsLabel    = if ($LimitTools) { "limited ($Tools)" } else { 'all' }
+        $healthTimeout = if ($script:Cfg.Contains('LlamaCppHealthCheckTimeoutSec')) { [int]$script:Cfg.LlamaCppHealthCheckTimeoutSec } else { 300 }
+
+        $notes = @()
+        if ($dryRunGgufNote)   { $notes += $dryRunGgufNote }
+        if ($dryRunServerNote) { $notes += $dryRunServerNote }
+        if ($AutoBest -and -not [string]::IsNullOrWhiteSpace($autoBestLoadedProfile)) {
+            $notes += "AutoBest: loaded saved tuner profile=$autoBestLoadedProfile (overrides applied to argv)"
+        }
+
+        $plan = @{
+            Title            = $title
+            Backend          = 'llamacpp'
+            Mode             = $Mode
+            Key              = $Key
+            Model            = $def.Root
+            ContextKey       = $ContextKey
+            ContextTokens    = $contextTokens
+            Quant            = $quantLabel
+            Parser           = $parserLabel
+            GgufPath         = $ggufPath
+            ServerPath       = $serverPath
+            ServerArgs       = $serverArgs
+            Port             = $port
+            BaseUrl          = $baseUrl
+            HealthCheck      = "http://127.0.0.1:$port/v1/models"
+            HealthTimeoutSec = $healthTimeout
+            Tools            = $toolsLabel
+            Thinking         = $thinking
+            VramNeeded       = $vramSize
+            VramAvailable    = $vramInfo.GB
+            VramSource       = $vramInfo.Source
+            FitClass         = $fit
+            Env              = $env
+            LaunchExe        = $launchExe
+            LaunchArgs       = $launchExeArgs
+            Notes            = $notes
+        }
+
+        Show-LocalLLMLaunchPlan -Plan $plan
+        return
     }
 
     $logPaths = New-LlamaServerLogPaths

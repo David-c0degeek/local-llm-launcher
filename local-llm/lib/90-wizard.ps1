@@ -1044,7 +1044,8 @@ function Invoke-LLMSelection {
         [switch]$Strict,
         [switch]$UseAutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
-        [switch]$UseSpectrePrompts
+        [switch]$UseSpectrePrompts,
+        [switch]$DryRun
     )
 
     if ($Backend -eq 'llamacpp') {
@@ -1055,21 +1056,21 @@ function Invoke-LLMSelection {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
             }
 
             "codex" {
                 Start-ClaudeWithLlamaCppModel `
                     -Key $ModelKey -ContextKey $ContextKey -Mode $LlamaCppMode `
                     -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Codex
+                    -LimitTools:([bool]$def.LimitTools) -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -Codex -DryRun:$DryRun
             }
 
             "unshackled" {
                 Invoke-Backend -Action launch-claude -Backend llamacpp `
                     -Key $ModelKey -ContextKey $ContextKey `
                     -LlamaCppMode $LlamaCppMode -KvCacheK $KvCacheK -KvCacheV $KvCacheV `
-                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile
+                    -LimitTools:([bool]$def.LimitTools) -Unshackled -Strict:$Strict -AutoBest:$UseAutoBest -AutoBestProfile $AutoBestProfile -DryRun:$DryRun
             }
 
             "setup" {
@@ -1096,19 +1097,19 @@ function Invoke-LLMSelection {
     # Ollama backend.
     switch ($Action) {
         "chat" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Chat -UseQ8:$UseQ8 -Strict:$Strict
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Chat -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun
         }
 
         "unshackled" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8 -Strict:$Strict
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Unshackled -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun
         }
 
         "codex" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Codex -UseQ8:$UseQ8 -Strict:$Strict
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -Codex -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun
         }
 
         "claude" {
-            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -UseQ8:$UseQ8 -Strict:$Strict
+            Invoke-ModelShortcut -Key $ModelKey -ContextKey $ContextKey -UseQ8:$UseQ8 -Strict:$Strict -DryRun:$DryRun
         }
 
         "benchmark" {

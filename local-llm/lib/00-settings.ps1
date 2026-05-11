@@ -1,6 +1,43 @@
-# Settings + config loading. Top-level scalars in llm-models.json (the catalog)
-# can be overlaid by ~/.local-llm/settings.json (gitignored, per-machine).
-# Models / CommandAliases stay in the catalog.
+# Settings + config loading. Three files participate, layered in this order:
+#   1. defaults.json (committed) — shipped launcher defaults (top-level scalars).
+#   2. llm-models.json (committed) — pure catalog: Models + CommandAliases only.
+#      Legacy installs may still carry the old scalars at the top level; those
+#      load as a fallback with a one-time migration warning.
+#   3. settings.json (gitignored) — per-machine overrides.
+#
+# Models and CommandAliases come exclusively from llm-models.json.
+
+# Top-level scalar keys that live in defaults.json (and used to live at the
+# top of llm-models.json). Used for legacy-shape detection and for clearer
+# error messages from Set-LocalLLMSetting.
+$script:LocalLLMDefaultsKeys = @(
+    'MinOllamaVersion', 'Default', 'KeepAlive', 'OllamaAppPath', 'OllamaCommunityRoot',
+    'RequireAdvertisedTools', 'NoThinkProxyPort', 'NoThinkProxyRequiredVersion',
+    'LlamaCppPort', 'LlamaCppServerPath',
+    'LlamaCppTurboquantRoot', 'LlamaCppTurboquantRepo', 'LlamaCppGgufRoot',
+    'LlamaCppDefaultMode', 'LlamaCppHealthCheckTimeoutSec', 'LlamaCppCoexistOllama',
+    'LocalModelTools'
+)
+
+function Get-LocalLLMDefaultsPath {
+    return Join-Path $script:LLMProfileRoot 'defaults.json'
+}
+
+function Import-LocalLLMDefaults {
+    $path = Get-LocalLLMDefaultsPath
+
+    if (-not (Test-Path -LiteralPath $path)) {
+        return [ordered]@{}
+    }
+
+    try {
+        return (Get-Content -Raw -Path $path | ConvertFrom-Json -AsHashtable)
+    }
+    catch {
+        Write-Warning "Could not parse $path : $($_.Exception.Message). Ignoring."
+        return [ordered]@{}
+    }
+}
 
 function Expand-LocalLLMPath {
     param([AllowEmptyString()][string]$Path)
@@ -43,8 +80,50 @@ function Import-LocalLLMConfig {
         throw "LocalBox config not found: $script:LocalLLMConfigPath"
     }
 
-    $cfg = Get-Content -Raw -Path $script:LocalLLMConfigPath | ConvertFrom-Json -AsHashtable
+    $catalog = Get-Content -Raw -Path $script:LocalLLMConfigPath | ConvertFrom-Json -AsHashtable
 
+    # Three-layer load order: defaults.json -> catalog -> settings.json.
+    # defaults.json is the new shipped baseline; if a catalog still carries
+    # legacy top-level scalars (pre-split shape), surface a one-time warning
+    # and treat them as a final fallback (lowest precedence).
+    $defaults = Import-LocalLLMDefaults
+
+    $legacyScalars = [ordered]@{}
+    foreach ($key in @($catalog.Keys)) {
+        if ($key -in @('Models', 'CommandAliases')) { continue }
+        $legacyScalars[$key] = $catalog[$key]
+    }
+
+    if ($legacyScalars.Count -gt 0) {
+        $catalogPathName = Split-Path -Leaf $script:LocalLLMConfigPath
+        $legacyList = ($legacyScalars.Keys -join ', ')
+        $msg = ("{0} still carries top-level launcher settings ({1}). " +
+            "These belong in defaults.json (shipped) or settings.json (per-machine) now. " +
+            "Run Migrate-LocalLLMConfig to move them automatically.") -f $catalogPathName, $legacyList
+        Write-Warning $msg
+    }
+
+    $cfg = @{}
+
+    # defaults.json: lowest precedence.
+    foreach ($key in @($defaults.Keys)) {
+        $cfg[$key] = $defaults[$key]
+    }
+
+    # Legacy catalog scalars (one-release fallback) overlay defaults.json.
+    foreach ($key in @($legacyScalars.Keys)) {
+        $cfg[$key] = $legacyScalars[$key]
+    }
+
+    # Models + CommandAliases are catalog-only.
+    if ($catalog.Contains('Models')) {
+        $cfg['Models'] = $catalog['Models']
+    }
+    if ($catalog.Contains('CommandAliases')) {
+        $cfg['CommandAliases'] = $catalog['CommandAliases']
+    }
+
+    # settings.json: per-machine overrides win.
     $settings = Import-LocalLLMSettings
 
     foreach ($key in @($settings.Keys)) {
@@ -105,6 +184,13 @@ function Import-LocalLLMConfig {
         $cfg.UnshackledRepoUrl = "https://github.com/David-c0degeek/unshackled"
     }
 
+    # Validate the merged config. Throws a single consolidated error message
+    # listing every problem. LOCALBOX_SKIP_CATALOG_VALIDATION=1 disables the
+    # check (escape hatch for migrating older catalogs that can't yet pass).
+    if ($env:LOCALBOX_SKIP_CATALOG_VALIDATION -ne '1' -and (Get-Command Test-LocalLLMCatalog -ErrorAction SilentlyContinue)) {
+        Test-LocalLLMCatalog -Config $cfg
+    }
+
     return $cfg
 }
 
@@ -117,6 +203,10 @@ function Set-LocalLLMSetting {
 
     if ($Key -in @("Models", "CommandAliases")) {
         throw "'$Key' belongs in llm-models.json (the catalog), not settings.json. Edit the catalog directly."
+    }
+
+    if ($Key -in $script:LocalLLMDefaultsKeys) {
+        Write-Verbose "'$Key' has a shipped default in defaults.json; your value in settings.json will overlay it."
     }
 
     $path = Get-LocalLLMSettingsPath

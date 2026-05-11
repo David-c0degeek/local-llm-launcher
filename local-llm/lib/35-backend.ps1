@@ -57,7 +57,8 @@ function Invoke-Backend {
         [switch]$AutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
-        [string[]]$ExtraUnshackledArgs
+        [string[]]$ExtraUnshackledArgs,
+        [switch]$DryRun
     )
 
     if ($Action -eq 'stop') {
@@ -91,7 +92,7 @@ function Invoke-Backend {
         'launch-claude' {
             switch ($Backend) {
                 'ollama' {
-                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Unshackled:$Unshackled -Codex:$Codex -Strict:$Strict -ExtraUnshackledArgs $ExtraUnshackledArgs
+                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Unshackled:$Unshackled -Codex:$Codex -Strict:$Strict -ExtraUnshackledArgs $ExtraUnshackledArgs -DryRun:$DryRun
                 }
                 'llamacpp' {
                     $mode = Resolve-LlamaCppMode -Mode $LlamaCppMode
@@ -108,7 +109,8 @@ function Invoke-Backend {
                         -AutoBest:$AutoBest `
                         -AutoBestProfile $AutoBestProfile `
                         -ExtraArgs $ExtraArgs `
-                        -ExtraUnshackledArgs $ExtraUnshackledArgs
+                        -ExtraUnshackledArgs $ExtraUnshackledArgs `
+                        -DryRun:$DryRun
                 }
             }
         }
@@ -116,7 +118,7 @@ function Invoke-Backend {
         'launch-chat' {
             switch ($Backend) {
                 'ollama' {
-                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -Chat -UseQ8:$UseQ8
+                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -Chat -UseQ8:$UseQ8 -DryRun:$DryRun
                 }
                 'llamacpp' {
                     throw "llama.cpp doesn't have a built-in chat REPL. Run launch-claude and point Claude Code at the running server, or open the llama-server web UI."
