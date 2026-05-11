@@ -19,3 +19,9 @@ function bp     { bpstatus }
 function unloadall { Unload-LocalLLM }
 function llmstop   { Unload-LocalLLM }
 function llm-stop  { Unload-LocalLLM }
+
+# Cross-backend status: shows running models for whichever backend is active.
+function llm-status {
+    if ($script:Cfg['DefaultBackend'] -eq 'llamacpp') { Get-LlamaServerStatus }
+    else { & ollama ps }
+}
