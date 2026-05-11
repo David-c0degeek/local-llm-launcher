@@ -588,12 +588,14 @@ function Get-AllManagedOllamaNames {
             $names.Add("${alias}:latest") | Out-Null
         }
 
-        # Strict sibling — managed regardless of the current Strict flag, so
+        # Strict siblings — managed regardless of the current Strict flag, so
         # leftovers from a previous build don't get classified as orphans
         # before the next 'init -Force' or 'removellm' rebuilds the entry.
-        $strictName = Get-ModelStrictAliasName -Def $def
-        $names.Add($strictName) | Out-Null
-        $names.Add("${strictName}:latest") | Out-Null
+        foreach ($contextKey in $def.Contexts.Keys) {
+            $strictName = Get-ModelStrictAliasName -Def $def -ContextKey $contextKey
+            $names.Add($strictName) | Out-Null
+            $names.Add("${strictName}:latest") | Out-Null
+        }
 
         if ($def.SourceType -eq 'remote' -and $def.RemoteModel) {
             $names.Add($def.RemoteModel) | Out-Null

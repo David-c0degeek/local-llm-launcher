@@ -65,8 +65,8 @@ function Get-ParserLines {
 # and only OVERRIDES sampling parameters and SYSTEM. Add new model families to
 # Get-ParserLines without touching this — strict keeps working.
 #
-# num_ctx is intentionally omitted: it's set per-alias by the caller, mirroring
-# the base model's default-context value (Get-ModelStrictBaseContextKey).
+# num_ctx is intentionally omitted: it's set per-alias by the caller, matching
+# the selected base context.
 function Get-StrictModelfileLines {
     $lines = New-Object System.Collections.Generic.List[string]
 

@@ -77,7 +77,8 @@ function Set-ClaudeLocalEnv {
     param(
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][string]$Model,
-        [bool]$KeepThinking = $false
+        [bool]$KeepThinking = $false,
+        [int]$ContextTokens = 0
     )
 
     $env:ANTHROPIC_BASE_URL = $BaseUrl
@@ -101,6 +102,10 @@ function Set-ClaudeLocalEnv {
     }
     if ($maxOutputTokens -gt 0) {
         $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = [string]$maxOutputTokens
+    }
+    if ($ContextTokens -gt 0) {
+        $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = [string]$ContextTokens
+        $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = [string]$ContextTokens
     }
 
     $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
@@ -867,9 +872,10 @@ function Start-ClaudeWithLlamaCppModel {
         throw
     }
 
+    $contextTokens = Get-ModelContextValue -Def $def -ContextKey $ContextKey
+
     if ($Codex) {
         try {
-            $contextTokens = Get-ModelContextValue -Def $def -ContextKey $ContextKey
             $maxOutputTokens = if ($script:Cfg.Contains("LocalModelMaxOutputTokens")) {
                 try { [int]$script:Cfg.LocalModelMaxOutputTokens } catch { 0 }
             } else {
@@ -930,7 +936,7 @@ function Start-ClaudeWithLlamaCppModel {
         }
     }
 
-        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep')
+        Set-ClaudeLocalEnv -BaseUrl $effectiveBaseUrl -Model $def.Root -KeepThinking:($thinkingPolicy -eq 'keep') -ContextTokens $contextTokens
 
         $backendLabel = if ($Unshackled) { "unshackled" } else { "claude" }
         $toolsLabel = if ($LimitTools) { "limited" } else { "all" }
@@ -991,3 +997,4 @@ function Start-ClaudeWithLlamaCppModel {
         Stop-LlamaServer
     }
 }
+

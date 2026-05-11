@@ -21,17 +21,13 @@ function Invoke-ModelShortcut {
         if (-not (Get-ModelStrictEnabled -Def $def)) {
             throw "Model '$Key' has Strict=false in the catalog; no strict sibling alias is built. Re-import via addllm and answer Yes to the strict prompt, or drop -Strict."
         }
-
-        if (-not [string]::IsNullOrWhiteSpace($ContextKey)) {
-            throw "-Strict and -Ctx are mutually exclusive. Strict siblings are pinned to the model's strict-base context; drop -Ctx."
-        }
     }
 
     # Q8 KV check sizes against the context that will actually be used. Strict
-    # siblings derive their num_ctx from Get-ModelStrictBaseContextKey, not the
-    # caller-supplied -Ctx (which is rejected above).
+    # without -Ctx keeps the legacy strict-base context; strict with -Ctx uses
+    # that context-specific strict alias.
     if ($UseQ8) {
-        $q8CtxKey = if ($Strict) { Get-ModelStrictBaseContextKey -Def $def } else { $ContextKey }
+        $q8CtxKey = if ($Strict -and [string]::IsNullOrWhiteSpace($ContextKey)) { Get-ModelStrictBaseContextKey -Def $def } else { $ContextKey }
         $numCtx = Get-ModelContextValue -Def $def -ContextKey $q8CtxKey
         $maxQ8 = Get-Q8KvMaxContext
 
@@ -45,7 +41,7 @@ function Invoke-ModelShortcut {
     }
 
     $modelName = if ($Strict) {
-        Ensure-ModelStrictAlias -Key $Key
+        Ensure-ModelStrictAlias -Key $Key -ContextKey $ContextKey
     } else {
         Ensure-ModelAlias -Key $Key -ContextKey $ContextKey
     }

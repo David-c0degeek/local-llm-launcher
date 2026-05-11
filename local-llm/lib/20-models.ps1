@@ -300,9 +300,17 @@ function Get-ModelStrictEnabled {
 }
 
 function Get-ModelStrictAliasName {
-    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def)
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [AllowEmptyString()][string]$ContextKey = ''
+    )
 
-    return "$($Def.Root)-strict"
+    if ([string]::IsNullOrWhiteSpace($ContextKey)) {
+        return "$($Def.Root)-strict"
+    }
+
+    $baseAliasName = Get-ModelAliasName -Def $Def -ContextKey $ContextKey
+    return "$baseAliasName-strict"
 }
 
 function Get-ModelStrictBaseContextKey {

@@ -142,10 +142,10 @@ function Get-StaleModelAliases {
         }
 
         if (Get-ModelStrictEnabled -Def $def) {
-            $strictName = Get-ModelStrictAliasName -Def $def
+            foreach ($strictCtxKey in $def.Contexts.Keys) {
+                $strictName = Get-ModelStrictAliasName -Def $def -ContextKey $strictCtxKey
 
-            if (Test-OllamaModelExists -ModelName $strictName) {
-                $strictCtxKey = Get-ModelStrictBaseContextKey -Def $def
+                if (-not (Test-OllamaModelExists -ModelName $strictName)) { continue }
                 $strictNumCtx = Get-ModelContextValue -Def $def -ContextKey $strictCtxKey
 
                 if (-not (Test-StrictAliasFresh -StrictAliasName $strictName -NumCtx $strictNumCtx)) {
@@ -207,12 +207,17 @@ function Ensure-ModelAlias {
 function Ensure-ModelStrictAlias {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
         [switch]$ForceRebuild
     )
 
     $def = Get-ModelDef -Key $Key
-    $strictName = Get-ModelStrictAliasName -Def $def
-    $baseCtxKey = Get-ModelStrictBaseContextKey -Def $def
+    $baseCtxKey = if ([string]::IsNullOrWhiteSpace($ContextKey)) {
+        Get-ModelStrictBaseContextKey -Def $def
+    } else {
+        Resolve-ModelContextKey -Def $def -ContextKey $ContextKey
+    }
+    $strictName = Get-ModelStrictAliasName -Def $def -ContextKey $baseCtxKey
     $baseName = Get-ModelAliasName -Def $def -ContextKey $baseCtxKey
     $numCtx = Get-ModelContextValue -Def $def -ContextKey $baseCtxKey
 
@@ -241,7 +246,9 @@ function Ensure-ModelAllAliases {
     }
 
     if (Get-ModelStrictEnabled -Def $def) {
-        Ensure-ModelStrictAlias -Key $Key -ForceRebuild:$ForceRebuild | Out-Null
+        foreach ($contextKey in $def.Contexts.Keys) {
+            Ensure-ModelStrictAlias -Key $Key -ContextKey $contextKey -ForceRebuild:$ForceRebuild | Out-Null
+        }
     }
 }
 
@@ -264,12 +271,14 @@ function Remove-ModelAliases {
         Remove-Item -Path $stampFile -Force -ErrorAction SilentlyContinue
     }
 
-    # Strict sibling — remove unconditionally, even if Strict is currently
+    # Strict siblings — remove unconditionally, even if Strict is currently
     # disabled, so leftovers from a previous build don't linger after the
     # user toggles Strict off.
-    $strictName = Get-ModelStrictAliasName -Def $def
-    & ollama rm $strictName 2>$null | Out-Null
-    Remove-Item -Path (Get-ProfileVersionFile -ModelName $strictName) -Force -ErrorAction SilentlyContinue
+    foreach ($contextKey in $def.Contexts.Keys) {
+        $strictName = Get-ModelStrictAliasName -Def $def -ContextKey $contextKey
+        & ollama rm $strictName 2>$null | Out-Null
+        Remove-Item -Path (Get-ProfileVersionFile -ModelName $strictName) -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Remove-ModelRemotePull {

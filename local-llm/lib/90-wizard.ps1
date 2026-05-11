@@ -1112,17 +1112,17 @@ function Invoke-LLMSelection {
         }
 
         "benchmark" {
-            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey }
+            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey -ContextKey $ContextKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey }
             Test-OllamaSpeed -Model $modelName -Runs 3
         }
 
         "setup" {
-            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey -ForceRebuild } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey -ForceRebuild }
+            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey -ContextKey $ContextKey -ForceRebuild } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey -ForceRebuild }
             Write-Host "Created/rebuilt alias: $modelName" -ForegroundColor Green
         }
 
         "show" {
-            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey }
+            $modelName = if ($Strict) { Ensure-ModelStrictAlias -Key $ModelKey -ContextKey $ContextKey } else { Ensure-ModelAlias -Key $ModelKey -ContextKey $ContextKey }
             & ollama show $modelName
         }
 
@@ -1195,15 +1195,7 @@ function Start-LLMWizardClassic {
                 if ($null -eq $strict) { $step = 'backend'; break }   # back
                 $useStrict = [bool]$strict
 
-                if ($useStrict) {
-                    # Strict pins context to Get-ModelStrictBaseContextKey via the
-                    # alias build; the empty contextKey is correct here because the
-                    # shortcut layer rejects -Strict + -Ctx together.
-                    $contextKey = ""
-                    $step = 'action'
-                } else {
-                    $step = 'context'
-                }
+                $step = 'context'
             }
 
             'context' {
@@ -1219,7 +1211,7 @@ function Start-LLMWizardClassic {
             'action' {
                 $action = Select-LLMAction -Backend $backend
                 if ([string]::IsNullOrWhiteSpace($action)) {
-                    $step = if ($useStrict) { 'strict' } else { 'context' }
+                    $step = 'context'
                     break
                 }
 
@@ -1905,12 +1897,7 @@ function Start-LLMWizardSpectre {
                 if ($null -eq $strict) { $step = 'backend'; break }
                 $useStrict = [bool]$strict
 
-                if ($useStrict) {
-                    $contextKey = ""
-                    $step = 'action'
-                } else {
-                    $step = 'context'
-                }
+                $step = 'context'
             }
 
             'context' {
@@ -1931,7 +1918,7 @@ function Start-LLMWizardSpectre {
                     Select-LLMActionSpectre -Backend $captured
                 }
                 if ([string]::IsNullOrWhiteSpace($action)) {
-                    $step = if ($useStrict) { 'strict' } else { 'context' }
+                    $step = 'context'
                     break
                 }
 
