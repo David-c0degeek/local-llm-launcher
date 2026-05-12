@@ -767,7 +767,9 @@ Each step has a Back option (`0`/Escape in native, `[[Back]]` in Spectre); the
 Spectre wizard wraps each prompt in `Invoke-LLMWizardStep` and logs the
 full exception trace to `~/.local-llm/wizard-errors.log` if anything throws,
 so a Spectre live-display refresh can't scroll the trace off screen. Inspect
-with `llmlogerr [-Lines 80]`; reset with `llmlogerrclear`.
+with `llmlogerr [-Lines 80]`; reset with `llmlogerrclear`. The launch debug
+trace (vision, proxy, llama-server, Claude launches) is recorded in
+`~/.local-llm/launch.log` and tailable with `llmlog [-Lines 80]`.
 
 After a model is selected, the Spectre wizard waits briefly before drawing the
 next prompt and retries one fast-empty transition. Tune that guard with
@@ -809,6 +811,7 @@ setups, so they stay.
 - **Stale aliases after editing a parser** → `init -Stale` rebuilds only the
   aliases whose Modelfile content hash drifted.
 - **Spectre wizard crashed or stalls** → `llmlogerr` for the full trace; use
+  `llmlog` for launch/debug details (vision, proxy, llama-server, Claude);
   `llmc` for the native picker or set `$env:LOCAL_LLM_NO_SPECTRE=1` to disable
   Spectre everywhere. If the next prompt appears too slowly after selecting a
   model, raise `$env:LOCAL_LLM_SPECTRE_PROMPT_COOLDOWN_MS`.

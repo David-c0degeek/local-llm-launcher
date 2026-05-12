@@ -1,7 +1,7 @@
 # Top-level command surface (one-liners that wrap into the wizard / reload).
 
-function llm     { Start-LLMWizard }
-function llmmenu { Start-LLMWizard }
+function llm     { Start-LLMWizard @args }
+function llmmenu { Start-LLMWizard @args }
 function llmc    { Start-LLMWizardClassic }
 function llms    { Start-LLMWizardSpectreExplicit }
 function reloadllm { Reload-LocalLLMConfig }

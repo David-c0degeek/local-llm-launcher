@@ -23,7 +23,55 @@ function Get-HuggingFaceModelInfo {
     param([Parameter(Mandatory = $true)][string]$Repo)
 
     $url = "https://huggingface.co/api/models/$Repo`?blobs=true"
-    return Invoke-RestMethod -Uri $url -UseBasicParsing
+    return Invoke-RestMethod -Uri $url -UseBasicParsing -SkipCertificateCheck
+}
+
+function Get-HuggingFaceMmprojFiles {
+    # Returns mmproj.gguf files from a HF repo: top-level files matching
+    # ^mmproj(-.*)?\.gguf$ (no subdirectory). Returns an ordered hashtable of
+    # filename -> sizeGB, an empty hashtable if none found, or $null on network error.
+    param([Parameter(Mandatory = $true)][string]$Repo)
+
+    $map = [ordered]@{}
+
+    try {
+        Write-LaunchLog "Querying HuggingFace for mmproj files in repo: $Repo" 'INFO'
+        $info = Get-HuggingFaceModelInfo -Repo $Repo
+
+        if (-not $info.siblings) {
+            Write-LaunchLog "No siblings found in HF response for $Repo" 'INFO'
+            return $map
+        }
+
+        foreach ($s in $info.siblings) {
+            $name = $s.rfilename
+            Write-LaunchLog "Checking file: $name" 'INFO'
+            if (-not $name) { continue }
+            if ($name -match '/') { continue } # skip subdirs
+            if ($name -notmatch '^mmproj(?:-.*)?\.gguf$') {
+                Write-LaunchLog "Skipping non-mmproj file: $name" 'INFO'
+                continue
+            }
+
+            $bytes = 0L
+            if ($s.PSObject.Properties.Match('lfs').Count -gt 0 -and $s.lfs -and $s.lfs.size) {
+                try { $bytes = [long]$s.lfs.size } catch { }
+            }
+            if ($bytes -le 0 -and $s.PSObject.Properties.Match('size').Count -gt 0 -and $s.size) {
+                try { $bytes = [long]$s.size } catch { }
+            }
+
+            $sizeGB = if ($bytes -gt 0) { [math]::Round($bytes / 1000000000, 1) } else { 0 }
+            $map[$name] = $sizeGB
+            Write-LaunchLog "Found mmproj: $name$(if ($sizeGB -gt 0) { " ($sizeGB GB)" })" 'INFO'
+        }
+
+        Write-LaunchLog "Total mmproj files found for ${Repo}: $($map.Count)" 'INFO'
+        return $map
+    } catch {
+        Write-LaunchLog "HF mmproj query failed for ${Repo} (network/SSL): $($_.Exception.Message)" 'WARN'
+        return $null
+    }
 }
 
 function Get-HuggingFaceModelFiles {
@@ -76,7 +124,7 @@ function Get-HuggingFaceReadme {
     $url = "https://huggingface.co/$Repo/raw/main/README.md"
 
     try {
-        $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
+        $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10 -SkipCertificateCheck
         return [string]$resp.Content
     } catch {
         return $null

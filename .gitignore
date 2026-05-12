@@ -47,3 +47,6 @@ $RECYCLE.BIN/
 
 .idea
 *.backup
+
+# Log files (dev / runtime temp logs)
+*.log

@@ -35,7 +35,7 @@ function Initialize-LocalLLM {
             Write-Host "  rebuilding: $($entry.AliasName)" -ForegroundColor DarkGray
 
             if ($entry.Kind -eq 'strict') {
-                Ensure-ModelStrictAlias -Key $entry.Key -ForceRebuild | Out-Null
+                Ensure-ModelStrictAlias -Key $entry.Key -ContextKey $entry.Context -ForceRebuild | Out-Null
             } else {
                 Ensure-ModelAlias -Key $entry.Key -ContextKey $entry.Context -ForceRebuild | Out-Null
             }

@@ -157,7 +157,7 @@ function Test-BenchPilotIntegrationAvailable {
     catch {
         $result.Reason = $_.Exception.Message
         if (-not $Quiet) {
-            Write-Verbose $result.Reason
+            Write-LaunchLog "BenchPilot check failed: $($result.Reason)" 'WARN'
         }
         return [pscustomobject]$result
     }
@@ -183,6 +183,7 @@ function Invoke-BenchPilotLauncherFindBest {
         [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
+        [int[]]$NCpuMoeCandidates,
         [switch]$NoSave
     )
 
@@ -222,8 +223,24 @@ function Invoke-BenchPilotLauncherFindBest {
     if ($PSBoundParameters.ContainsKey('BeamWidth')) {
         $params.BeamWidth = $BeamWidth
     }
+    if ($PSBoundParameters.ContainsKey('NCpuMoeCandidates') -and $NCpuMoeCandidates -and $NCpuMoeCandidates.Count -gt 0) {
+        $params.NCpuMoeCandidates = $NCpuMoeCandidates
+    }
 
     Find-BenchPilotBestConfig @params
+}
+
+function Get-BenchPilotTopNCpuMoeValues {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowEmptyString()][string]$ContextKey = '',
+        [int]$TopN = 5
+    )
+    try { Import-BenchPilotModule | Out-Null } catch { return @() }
+    if (Get-Command Get-LlamaCppTopNCpuMoeFromCandidates -ErrorAction SilentlyContinue) {
+        return @(Get-LlamaCppTopNCpuMoeFromCandidates -Key $Key -ContextKey $ContextKey -TopN $TopN)
+    }
+    return @()
 }
 
 function Get-BenchPilotLauncherBestConfig {

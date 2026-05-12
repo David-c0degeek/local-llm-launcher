@@ -259,6 +259,36 @@ function Add-LocalLLMModel {
         $entry.LlamaCppCompatible = [bool]$LlamaCppCompatible
     }
 
+    # Check for mmproj (multimodal vision module). Prompt the user to download.
+    if ($PSBoundParameters.ContainsKey('Mmproj')) {
+        $mmprojFile = [string]$Mmproj
+        if (-not [string]::IsNullOrWhiteSpace($mmprojFile)) {
+            $entry.VisionModule = $mmprojFile
+        }
+    }
+    else {
+        $mmprojFiles = Get-HuggingFaceMmprojFiles -Repo $repo
+        if ($mmprojFiles.Count -gt 0) {
+            $mmprojNames = @($mmprojFiles.Keys) -join ', '
+            Write-Host "Vision modules (mmproj.gguf) found: $mmprojNames" -ForegroundColor DarkCyan
+
+            $answer = (Read-Host "Download a vision module? [Y/n]").Trim().ToLowerInvariant()
+            if ($answer -notin @('n', 'no')) {
+                # Prefer the first available mmproj; fall back to user selection
+                $chosen = $mmprojNames[0]
+                $chosen = Read-Host "Which one? (default: $chosen)"
+                if ([string]::IsNullOrWhiteSpace($chosen)) {
+                    $chosen = [string]$mmprojFiles.Keys | Select-Object -First 1
+                }
+
+                if ($mmprojFiles.ContainsKey($chosen)) {
+                    $entry.VisionModule = $chosen
+                    Write-Host "Vision module set to: $chosen" -ForegroundColor DarkGray
+                }
+            }
+        }
+    }
+
     if ($cfg.Models.Contains($Key)) {
         $cfg.Models.Remove($Key)
     }
@@ -318,6 +348,7 @@ function addllm {
         [string[]]$Tags,
         [string[]]$ExtraArgs,
         [Nullable[bool]]$LlamaCppCompatible,
+        [string]$Mmproj,
         [switch]$Force
     )
 
@@ -416,7 +447,30 @@ function Update-LocalLLMModelQuants {
 
     if ($addedCount -eq 0) {
         Write-Host "  (no new quants — entry already has every recognized GGUF in $repo)" -ForegroundColor DarkGray
-        return
+    }
+
+    # Also check for mmproj files on updatellm.
+    $mmprojFiles = Get-HuggingFaceMmprojFiles -Repo $repo
+    if ($mmprojFiles.Count -gt 0) {
+        if (-not $entry.ContainsKey('VisionModule')) {
+            $mmprojNames = @($mmprojFiles.Keys) -join ', '
+            Write-Host "Vision modules (mmproj.gguf) found: $mmprojNames" -ForegroundColor DarkCyan
+
+            $answer = (Read-Host "Download a vision module? [Y/n]").Trim().ToLowerInvariant()
+            if ($answer -notin @('n', 'no')) {
+                $chosen = Read-Host "Which one? (default: $($mmprojFiles.Keys | Select-Object -First 1))"
+                if ([string]::IsNullOrWhiteSpace($chosen)) {
+                    $chosen = [string]$mmprojFiles.Keys | Select-Object -First 1
+                }
+                if ($mmprojFiles.ContainsKey($chosen)) {
+                    $entry.VisionModule = $chosen
+                    Write-Host "Vision module set to: $chosen" -ForegroundColor DarkGray
+                }
+            }
+        }
+        else {
+            Write-Host "Vision module already configured: $($entry.VisionModule)" -ForegroundColor DarkGray
+        }
     }
 
     if ($DryRun) {
@@ -598,12 +652,14 @@ function Get-AllManagedOllamaNames {
             $names.Add("${alias}:latest") | Out-Null
         }
 
-        # Strict sibling — managed regardless of the current Strict flag, so
+        # Strict siblings — managed regardless of the current Strict flag, so
         # leftovers from a previous build don't get classified as orphans
         # before the next 'init -Force' or 'removellm' rebuilds the entry.
-        $strictName = Get-ModelStrictAliasName -Def $def
-        $names.Add($strictName) | Out-Null
-        $names.Add("${strictName}:latest") | Out-Null
+        foreach ($contextKey in $def.Contexts.Keys) {
+            $strictName = Get-ModelStrictAliasName -Def $def -ContextKey $contextKey
+            $names.Add($strictName) | Out-Null
+            $names.Add("${strictName}:latest") | Out-Null
+        }
 
         if ($def.SourceType -eq 'remote' -and $def.RemoteModel) {
             $names.Add($def.RemoteModel) | Out-Null

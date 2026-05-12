@@ -69,10 +69,13 @@ function Build-LlamaServerArgs {
         [int]$Threads,
         [int]$ThreadsBatch,
         [Nullable[bool]]$FlashAttn,
+        [switch]$SwaFull,
+        [Nullable[bool]]$CachePrompt,
         [ValidateSet('none', 'layer', 'row')][string]$SplitMode,
         [string]$ChatTemplate,
         [string]$ThinkingPolicy,
         [switch]$Strict,
+        [string]$VisionModulePath,
         [string[]]$ExtraArgs
     )
 
@@ -172,6 +175,13 @@ function Build-LlamaServerArgs {
         $argList.Add($(if ($FlashAttn) { 'on' } else { 'off' })) | Out-Null
     }
 
+    if ($PSBoundParameters.ContainsKey('SwaFull') -and $SwaFull) {
+        $argList.Add('--swa-full') | Out-Null
+    }
+    if ($PSBoundParameters.ContainsKey('CachePrompt') -and $null -ne $CachePrompt -and $CachePrompt) {
+        $argList.Add('--cache-prompt') | Out-Null
+    }
+
     # Multi-GPU split mode. Emitted only when caller passes a value.
     if ($PSBoundParameters.ContainsKey('SplitMode') -and -not [string]::IsNullOrWhiteSpace($SplitMode)) {
         $argList.Add('--split-mode')   | Out-Null
@@ -196,6 +206,12 @@ function Build-LlamaServerArgs {
 
     foreach ($a in (Resolve-LlamaCppChatTemplate -Parser $parser -Override $ChatTemplate)) {
         $argList.Add($a) | Out-Null
+    }
+
+    # Vision / multimodal. --mmproj loads the projection layer for vision models.
+    if (-not [string]::IsNullOrWhiteSpace($VisionModulePath)) {
+        $argList.Add('--mmproj')          | Out-Null
+        $argList.Add($VisionModulePath)   | Out-Null
     }
 
     # Reasoning routing.
