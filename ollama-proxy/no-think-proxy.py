@@ -38,6 +38,12 @@ import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Bump on every wire-format change (request rewriting, response stripping, SSE
+# handling). LocalBox compares this against NoThinkProxyRequiredVersion in
+# defaults.json and warns when the deployed proxy is older than the launcher
+# expects. Format: SemVer "MAJOR.MINOR.PATCH".
+__version__ = "1.0.0"
+
 
 TARGET_HOST = "127.0.0.1"
 TARGET_PORT = 11434
@@ -520,6 +526,12 @@ def _parse_target(spec):
 
 def main():
     global TARGET_HOST, TARGET_PORT
+
+    # --version is parsed before any other arg so the launcher can detect a
+    # stale deployment without launching the server.
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
+        print(__version__)
+        return
 
     listen_port = (
         int(sys.argv[1])

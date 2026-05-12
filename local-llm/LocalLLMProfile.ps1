@@ -43,4 +43,11 @@ $script:NoThinkProxyPort = [int]$script:Cfg.NoThinkProxyPort
 # runs through the local backend wrapper.
 $env:ENFORCER_CLAUDE_CMD = "pwsh -NoProfile -File $HOME\.ollama-proxy\enforcer-claude.ps1"
 
+# Warn once per session if the deployed no-think proxy is older than the
+# launcher's required version. The check is non-fatal (proxy may still work);
+# silent on success. LOCALBOX_SKIP_PROXY_CHECK=1 disables it entirely.
+if ($env:LOCALBOX_SKIP_PROXY_CHECK -ne '1' -and (Get-Command Test-LocalLLMProxyVersion -ErrorAction SilentlyContinue)) {
+    try { Test-LocalLLMProxyVersion | Out-Null } catch {}
+}
+
 Register-ModelShortcuts

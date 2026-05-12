@@ -4,6 +4,199 @@
 
 $script:LocalLLMSpectreState = $null  # $true / $false / $null (unprobed)
 
+function Format-LocalLLMArgvLine {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Argv)
+
+    # Quote tokens that contain whitespace or quote characters so the preview
+    # round-trips back to a usable command line if a user copy-pastes it.
+    $quoted = foreach ($a in $Argv) {
+        if ([string]::IsNullOrEmpty($a)) {
+            '""'
+        }
+        elseif ($a -match '[\s"]') {
+            '"' + ($a -replace '"', '\"') + '"'
+        }
+        else {
+            $a
+        }
+    }
+
+    return ($quoted -join ' ')
+}
+
+function Show-LocalLLMLaunchPlan {
+    # Preview-mode renderer used by every -DryRun path. Callers build a plan
+    # hashtable describing the resolved launch (argv, env, VRAM estimate, etc.)
+    # and pass it here in place of actually spawning anything.
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][hashtable]$Plan)
+
+    $title = if ($Plan.Contains('Title') -and -not [string]::IsNullOrWhiteSpace([string]$Plan.Title)) {
+        [string]$Plan.Title
+    } else {
+        'launch preview'
+    }
+
+    Write-Host ""
+    Write-Host "=== DryRun: $title (nothing spawned) ===" -ForegroundColor Cyan
+
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $add = {
+        param($label, $value)
+        if ($null -eq $value) { return }
+        $text = [string]$value
+        if ([string]::IsNullOrWhiteSpace($text)) { return }
+        $rows.Add(@{ Label = $label; Value = $text }) | Out-Null
+    }
+
+    & $add 'Backend'  $Plan.Backend
+    & $add 'Mode'     $Plan.Mode
+    & $add 'Key'      $Plan.Key
+    & $add 'Model'    $Plan.Model
+    if ($Plan.Contains('ContextKey')) {
+        $ctxLabel = [string]$Plan.ContextKey
+        if ([string]::IsNullOrWhiteSpace($ctxLabel)) { $ctxLabel = 'default' }
+        if ($Plan.Contains('ContextTokens') -and [int]$Plan.ContextTokens -gt 0) {
+            $ctxLabel = "$ctxLabel ($([int]$Plan.ContextTokens) tokens)"
+        }
+        & $add 'Context' $ctxLabel
+    } elseif ($Plan.Contains('ContextTokens') -and [int]$Plan.ContextTokens -gt 0) {
+        & $add 'Context' ("{0} tokens" -f [int]$Plan.ContextTokens)
+    }
+    & $add 'Quant'    $Plan.Quant
+    & $add 'Parser'   $Plan.Parser
+    & $add 'GGUF'     $Plan.GgufPath
+    & $add 'Server'   $Plan.ServerPath
+    & $add 'Port'     $Plan.Port
+    & $add 'BaseUrl'  $Plan.BaseUrl
+    & $add 'Health'   $Plan.HealthCheck
+    if ($Plan.Contains('HealthTimeoutSec') -and [int]$Plan.HealthTimeoutSec -gt 0) {
+        & $add 'HealthTimeout' ("{0}s" -f [int]$Plan.HealthTimeoutSec)
+    }
+    & $add 'Tools'    $Plan.Tools
+    & $add 'Thinking' $Plan.Thinking
+
+    if ($Plan.Contains('VramAvailable') -or $Plan.Contains('VramNeeded')) {
+        $parts = @()
+        if ($Plan.Contains('VramNeeded') -and $null -ne $Plan.VramNeeded) {
+            $parts += ("{0:N1} GB needed" -f [double]$Plan.VramNeeded)
+        }
+        if ($Plan.Contains('VramAvailable') -and $null -ne $Plan.VramAvailable) {
+            $availLabel = ("{0} GB available" -f [int]$Plan.VramAvailable)
+            if ($Plan.Contains('VramSource') -and -not [string]::IsNullOrWhiteSpace([string]$Plan.VramSource)) {
+                $availLabel += " ($($Plan.VramSource))"
+            }
+            $parts += $availLabel
+        }
+        if ($Plan.Contains('FitClass') -and -not [string]::IsNullOrWhiteSpace([string]$Plan.FitClass)) {
+            $parts += "fit=$($Plan.FitClass)"
+        }
+        if ($parts.Count -gt 0) {
+            & $add 'VRAM' ($parts -join ' / ')
+        }
+    }
+
+    foreach ($row in $rows) {
+        Write-Host ("  {0,-13}: " -f $row.Label) -ForegroundColor DarkGray -NoNewline
+        Write-Host $row.Value
+    }
+
+    if ($Plan.Contains('ServerArgs') -and $Plan.ServerArgs) {
+        Write-Host ""
+        Write-Host "  Server argv:" -ForegroundColor DarkGray
+        $argv = @($Plan.ServerArgs)
+        $serverPath = if ($Plan.Contains('ServerPath') -and -not [string]::IsNullOrWhiteSpace([string]$Plan.ServerPath)) {
+            [string]$Plan.ServerPath
+        } else {
+            'llama-server'
+        }
+        $line = Format-LocalLLMArgvLine -Argv (@($serverPath) + $argv)
+        Write-Host "    $line" -ForegroundColor Gray
+    }
+
+    if ($Plan.Contains('LaunchCmd') -and -not [string]::IsNullOrWhiteSpace([string]$Plan.LaunchCmd)) {
+        Write-Host ""
+        Write-Host "  Agent command:" -ForegroundColor DarkGray
+        Write-Host "    $($Plan.LaunchCmd)" -ForegroundColor Gray
+    } elseif ($Plan.Contains('LaunchArgs') -and $Plan.LaunchArgs) {
+        Write-Host ""
+        Write-Host "  Agent argv:" -ForegroundColor DarkGray
+        $exe = if ($Plan.Contains('LaunchExe') -and -not [string]::IsNullOrWhiteSpace([string]$Plan.LaunchExe)) {
+            [string]$Plan.LaunchExe
+        } else {
+            'claude'
+        }
+        $line = Format-LocalLLMArgvLine -Argv (@($exe) + @($Plan.LaunchArgs))
+        Write-Host "    $line" -ForegroundColor Gray
+    }
+
+    if ($Plan.Contains('Env') -and $Plan.Env -and ([System.Collections.IDictionary]$Plan.Env).Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Env (would set):" -ForegroundColor DarkGray
+        $envMap = [System.Collections.IDictionary]$Plan.Env
+        $names = @($envMap.Keys | Sort-Object)
+        foreach ($name in $names) {
+            $val = [string]$envMap[$name]
+            Write-Host ("    {0,-38} = {1}" -f $name, $val) -ForegroundColor Gray
+        }
+    }
+
+    if ($Plan.Contains('Notes') -and $Plan.Notes) {
+        Write-Host ""
+        foreach ($note in @($Plan.Notes)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$note)) {
+                Write-Host "  ! $note" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    Write-Host ""
+}
+
+function Get-LocalLLMClaudeEnvSnapshot {
+    # Capture the env vars Set-ClaudeLocalEnv would write, without actually
+    # touching the process environment. Mirrors the logic in
+    # Set-ClaudeLocalEnv in lib/65-claude-launch.ps1.
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Model,
+        [bool]$KeepThinking = $false,
+        [string]$AuthToken = 'local'
+    )
+
+    $env = [ordered]@{
+        ANTHROPIC_BASE_URL              = $BaseUrl
+        ANTHROPIC_AUTH_TOKEN            = $AuthToken
+        ANTHROPIC_API_KEY               = ''
+        ANTHROPIC_MODEL                 = $Model
+        ANTHROPIC_DEFAULT_OPUS_MODEL    = $Model
+        ANTHROPIC_DEFAULT_SONNET_MODEL  = $Model
+        ANTHROPIC_DEFAULT_HAIKU_MODEL   = $Model
+    }
+
+    if (-not $KeepThinking) {
+        $env.CLAUDE_CODE_DISABLE_THINKING          = '1'
+        $env.MAX_THINKING_TOKENS                   = '0'
+        $env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = '1'
+    }
+
+    $maxOutputTokens = if ($script:Cfg.Contains('LocalModelMaxOutputTokens')) {
+        try { [int]$script:Cfg.LocalModelMaxOutputTokens } catch { 4096 }
+    } else {
+        4096
+    }
+    if ($maxOutputTokens -gt 0) {
+        $env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = [string]$maxOutputTokens
+    }
+
+    $env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0'
+    $env.DISABLE_PROMPT_CACHING         = '1'
+    $env.API_TIMEOUT_MS                 = '1800000'
+    $env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'
+
+    return $env
+}
+
 function Show-ClaudeTarget {
     Write-Section "Claude"
     Write-Host "Target : $(Get-ClaudeTargetSummary)" -ForegroundColor Yellow

@@ -228,15 +228,50 @@ function Stop-AllLlamaServers {
 
 function Get-LlamaServerStatus {
     $session = Get-CurrentBackendSession
-    if (-not $session) {
+    $sessionPid = if ($session) { $session.Pid } else { $null }
+
+    if ($session) {
+        Write-Host "Backend  : $($session.Backend) ($($session.Mode))" -ForegroundColor Cyan
+        Write-Host "Port     : $($session.Port)" -ForegroundColor DarkGray
+        Write-Host "Base URL : $($session.BaseUrl)" -ForegroundColor DarkGray
+        if ($session.Pid)      { Write-Host "PID      : $($session.Pid)" -ForegroundColor DarkGray }
+        if ($session.Model)    { Write-Host "Model    : $($session.Model)" -ForegroundColor DarkGray }
+        if ($session.GgufPath) { Write-Host "GGUF     : $($session.GgufPath)" -ForegroundColor DarkGray }
+    }
+
+    # CIM gives us CommandLine so we can surface port/model for processes
+    # this shell didn't launch (e.g. servers from another PowerShell window).
+    $procs = $null
+    try {
+        $procs = Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" -ErrorAction Stop
+    } catch {
+        $procs = Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue |
+            ForEach-Object { [pscustomobject]@{ ProcessId = $_.Id; CommandLine = $null } }
+    }
+
+    $untracked = @($procs | Where-Object { $_.ProcessId -ne $sessionPid })
+
+    if (-not $session -and -not $untracked) {
         Write-Host "No llama-server session active." -ForegroundColor DarkGray
         return
     }
 
-    Write-Host "Backend  : $($session.Backend) ($($session.Mode))" -ForegroundColor Cyan
-    Write-Host "Port     : $($session.Port)" -ForegroundColor DarkGray
-    Write-Host "Base URL : $($session.BaseUrl)" -ForegroundColor DarkGray
-    if ($session.Pid)      { Write-Host "PID      : $($session.Pid)" -ForegroundColor DarkGray }
-    if ($session.Model)    { Write-Host "Model    : $($session.Model)" -ForegroundColor DarkGray }
-    if ($session.GgufPath) { Write-Host "GGUF     : $($session.GgufPath)" -ForegroundColor DarkGray }
+    if ($untracked) {
+        if ($session) { Write-Host "" }
+        Write-Host "Untracked llama-server processes (other shells):" -ForegroundColor Yellow
+        foreach ($p in $untracked) {
+            $port  = $null
+            $model = $null
+            if ($p.CommandLine) {
+                if ($p.CommandLine -match '(?:--port|-p)\s+(\d+)') { $port = $Matches[1] }
+                if ($p.CommandLine -match '(?:--model|-m)\s+"?([^"]+\.gguf)"?') {
+                    $model = Split-Path -Leaf $Matches[1]
+                }
+            }
+            $bits = @("PID $($p.ProcessId)")
+            if ($port)  { $bits += "port $port" }
+            if ($model) { $bits += "model $model" }
+            Write-Host ("  - " + ($bits -join '  ')) -ForegroundColor DarkGray
+        }
+    }
 }

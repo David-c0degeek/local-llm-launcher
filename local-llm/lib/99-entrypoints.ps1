@@ -19,3 +19,14 @@ function bp     { bpstatus }
 function unloadall { Unload-LocalLLM }
 function llmstop   { Unload-LocalLLM }
 function llm-stop  { Unload-LocalLLM }
+
+# Cross-backend status: shows running models for both backends, regardless
+# of DefaultBackend. Either side may be empty.
+function llm-status {
+    Write-Host "== Ollama ==" -ForegroundColor Cyan
+    & ollama ps
+
+    Write-Host ""
+    Write-Host "== llama.cpp ==" -ForegroundColor Cyan
+    Get-LlamaServerStatus
+}

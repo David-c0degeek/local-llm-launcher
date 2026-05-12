@@ -4,6 +4,16 @@
 function Save-LocalLLMConfig {
     param([Parameter(Mandatory = $true)][object]$Cfg)
 
+    # Run the validator before writing so addllm/updatellm/removellm can't
+    # persist a malformed catalog. Honor the same escape hatch as load-time
+    # validation. Skip silently when the validator isn't loaded yet (e.g.
+    # during early bootstrap or in test harnesses that hand-roll save calls).
+    if ($env:LOCALBOX_SKIP_CATALOG_VALIDATION -ne '1' -and
+        ($Cfg -is [System.Collections.IDictionary]) -and
+        (Get-Command Test-LocalLLMCatalog -ErrorAction SilentlyContinue)) {
+        Test-LocalLLMCatalog -Config $Cfg
+    }
+
     $json = $Cfg | ConvertTo-Json -Depth 32
     $json = [regex]::Replace($json, '(?m)^( {4})+', { param($m) ' ' * ($m.Value.Length / 2) })
 
