@@ -54,6 +54,7 @@ function Invoke-Backend {
         [switch]$Unshackled,
         [switch]$Codex,
         [switch]$Strict,
+        [switch]$UseVision,
         [switch]$AutoBest,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
         [string[]]$ExtraArgs,
@@ -91,7 +92,7 @@ function Invoke-Backend {
         'launch-claude' {
             switch ($Backend) {
                 'ollama' {
-                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Unshackled:$Unshackled -Codex:$Codex -Strict:$Strict -ExtraUnshackledArgs $ExtraUnshackledArgs
+                    Invoke-ModelShortcut -Key $Key -ContextKey $ContextKey -UseQ8:$UseQ8 -Unshackled:$Unshackled -Codex:$Codex -Strict:$Strict -UseVision:$UseVision -ExtraUnshackledArgs $ExtraUnshackledArgs
                 }
                 'llamacpp' {
                     $mode = Resolve-LlamaCppMode -Mode $LlamaCppMode
@@ -105,6 +106,7 @@ function Invoke-Backend {
                         -Unshackled:$Unshackled `
                         -Codex:$Codex `
                         -Strict:$Strict `
+                        -UseVision:$UseVision `
                         -AutoBest:$AutoBest `
                         -AutoBestProfile $AutoBestProfile `
                         -ExtraArgs $ExtraArgs `

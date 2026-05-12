@@ -65,7 +65,7 @@ function Restore-ClaudeEnvBackup {
     }
 
     $script:ClaudeEnvBackup = @{}
-    Write-Verbose "Claude env vars restored."
+    Write-LaunchLog "Claude env vars restored." 'INFO'
 }
 
 function Set-ClaudeLocalEnv {
@@ -134,19 +134,24 @@ function Start-NoThinkProxy {
     )
 
     $target = "${TargetHost}:${TargetPort}"
+    Write-LaunchLog "No-think proxy: target=$target port=$($script:NoThinkProxyPort)" 'PROXY'
     $targetMatches = Test-NoThinkProxyTarget -ListenPort $script:NoThinkProxyPort -TargetHost $TargetHost -TargetPort $TargetPort
     if ($targetMatches -eq $true) {
+        Write-LaunchLog "No-think proxy already running for target=$target" 'PROXY'
         return
     }
     if ($targetMatches -eq $false) {
         throw "No-think proxy port $($script:NoThinkProxyPort) is already in use by a proxy for a different or unverifiable target. Stop that process or change NoThinkProxyPort."
     }
 
+    $proxyScript = Join-Path $HOME ".ollama-proxy\no-think-proxy.py"
+
     if ($script:NoThinkProxyProcess -and -not $script:NoThinkProxyProcess.HasExited) {
+        Write-LaunchLog "Reusing existing no-think proxy process (PID=$($script:NoThinkProxyProcess.Id))" 'PROXY'
         return
     }
 
-    $proxyScript = Join-Path $HOME ".ollama-proxy\no-think-proxy.py"
+    Write-LaunchLog "Starting no-think proxy: python $proxyScript $port $target" 'PROXY'
 
     if (-not (Test-Path $proxyScript)) {
         throw "No-think proxy not found: $proxyScript. Re-run install.ps1 so Claude/Unshackled launches do not point at a dead proxy URL."
@@ -607,7 +612,7 @@ function Start-ClaudeWithOllamaModel {
         $thinkingLabel = if ($keepThinking) { "kept (direct to Ollama)" } else { "disabled" }
 
         Write-Host ""
-        Write-Host "Launching $backendLabel with $Model via Ollama..." -ForegroundColor Cyan
+        Write-Host "Launching ${$backendLabel} with $Model via Ollama..." -ForegroundColor Cyan
         Write-Host "  Base URL : $($env:ANTHROPIC_BASE_URL)" -ForegroundColor DarkGray
         Write-Host "  Model    : $Model" -ForegroundColor DarkGray
         Write-Host "  Thinking : $thinkingLabel" -ForegroundColor DarkGray
@@ -689,6 +694,7 @@ function Start-ClaudeWithLlamaCppModel {
         [switch]$Unshackled,
         [switch]$Codex,
         [switch]$Strict,
+        [switch]$UseVision,
         [switch]$AutoBest,
         [switch]$AutoBestStrict,
         [ValidateSet('auto','pure','balanced','short','long')][string]$AutoBestProfile = 'auto',
@@ -742,13 +748,42 @@ function Start-ClaudeWithLlamaCppModel {
         256
     }
 
+    # Resolve vision module (mmproj) on demand when user opts in; always log availability.
+    $visionModulePath = if ($UseVision) {
+        Write-LaunchLog "Resolving vision module for llama.cpp launch (model=$($def.Root))" 'VISION'
+        $result = Get-ModelVisionModulePath -Key $Key -Def $def -Backend llamacpp
+        if ($result) {
+            Write-LaunchLog "Vision module resolved: $([System.IO.Path]::GetFileName($result))" 'VISION'
+        } else {
+            Write-LaunchLog "No vision module found for $Key" 'WARN'
+        }
+        $result
+    } else {
+        $avail = Test-ModelVisionModuleAvailable -Key $Key -Def $def -Backend llamacpp
+        if ($avail.Local) {
+            Write-LaunchLog "Vision available locally ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
+        } elseif ($avail.AvailableOnHF) {
+            Write-LaunchLog "Vision available on HuggingFace ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
+        } else {
+            Write-LaunchLog "No vision module available for $Key (llama.cpp)" 'VISION'
+        }
+        ''
+    }
+
+    if ($UseVision -and $visionModulePath) {
+        Write-Host "Vision: loaded mmproj $([System.IO.Path]::GetFileName($visionModulePath))" -ForegroundColor DarkCyan
+    } elseif ($UseVision) {
+        Write-Warning "Vision requested but no mmproj found for $Key"
+    }
+
     $buildParams = @{
-        Def            = $def
-        ContextKey     = $ContextKey
-        Mode           = $Mode
-        ModelArgPath   = $modelArgPath
-        Port           = $port
-        ThinkingPolicy = $thinkingPolicy
+        Def              = $def
+        ContextKey       = $ContextKey
+        Mode             = $Mode
+        ModelArgPath     = $modelArgPath
+        Port             = $port
+        ThinkingPolicy   = $thinkingPolicy
+        VisionModulePath = $(if ($visionModulePath) { $visionModulePath } else { '' })
     }
     if ($agentParallel -gt 0) { $buildParams.Parallel = $agentParallel }
     if ($agentCacheReuse -gt 0) { $buildParams.CacheReuse = $agentCacheReuse }
@@ -793,7 +828,7 @@ function Start-ClaudeWithLlamaCppModel {
                     Write-Warning "AutoBest: $reason"
                 }
             }
-            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode')
+            $tunable = @('KvK','KvV','NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','ThreadsBatch','Mlock','NoMmap','FlashAttn','SplitMode','SwaFull','CachePrompt','CacheReuse')
             foreach ($k in $tunable) {
                 if ($buildParams.ContainsKey($k)) { continue }
                 $val = $null
@@ -844,9 +879,14 @@ function Start-ClaudeWithLlamaCppModel {
     Write-Host "Starting llama-server for $($def.Root) via llama.cpp ($Mode)..." -ForegroundColor Cyan
     Write-Host "  Server   : $serverPath" -ForegroundColor DarkGray
     Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+    if ($VisionModulePath) {
+        Write-Host "  Vision   : $([System.IO.Path]::GetFileName($VisionModulePath))" -ForegroundColor DarkCyan
+    }
     Write-Host "  Port     : $port" -ForegroundColor DarkGray
     Write-Host "  Logs     : $($logPaths.Out)" -ForegroundColor DarkGray
     Write-Host "             $($logPaths.Err)" -ForegroundColor DarkGray
+
+    Write-LaunchLog "llama-server: path=$serverPath port=$port gguf=$ggufPath mode=$Mode" 'SERVER'
 
     $proc = Start-LlamaServerNative -ServerPath $serverPath -ServerArgs $serverArgs -OutLogPath $logPaths.Out -ErrLogPath $logPaths.Err
 
@@ -887,6 +927,9 @@ function Start-ClaudeWithLlamaCppModel {
             Write-Host "  Base URL : http://localhost:$port/v1" -ForegroundColor DarkGray
             Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
             Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+            if ($VisionModulePath) {
+                Write-Host "  Vision   : $([System.IO.Path]::GetFileName($VisionModulePath))" -ForegroundColor DarkCyan
+            }
             Write-Host "  Port     : $port" -ForegroundColor DarkGray
             Write-Host "  Strict   : $([bool]$Strict)" -ForegroundColor DarkGray
             Write-Host ""
@@ -953,6 +996,9 @@ function Start-ClaudeWithLlamaCppModel {
         Write-Host "  Base URL : $effectiveBaseUrl" -ForegroundColor DarkGray
         Write-Host "  Model    : $($def.Root)" -ForegroundColor DarkGray
         Write-Host "  GGUF     : $ggufPath" -ForegroundColor DarkGray
+        if ($VisionModulePath) {
+            Write-Host "  Vision   : $([System.IO.Path]::GetFileName($VisionModulePath))" -ForegroundColor DarkCyan
+        }
         Write-Host "  Port     : $port" -ForegroundColor DarkGray
         $agentSlotsLabel = if ($agentParallel -gt 0) { [string]$agentParallel } else { 'auto' }
         $agentCacheReuseLabel = if ($agentCacheReuse -gt 0) { [string]$agentCacheReuse } else { 'default' }
@@ -978,6 +1024,8 @@ function Start-ClaudeWithLlamaCppModel {
                 $systemPrompt
             )
         }
+
+        Write-LaunchLog "Launching ${$backendLabel}: model=$($def.Root) base=$effectiveBaseUrl unshackled=$Unshackled" 'LAUNCH'
 
         if ($Unshackled) {
             $extras = Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs

@@ -96,7 +96,7 @@ function Test-LocalLLMSpectreAvailable {
         $script:LocalLLMSpectreState = $true
         return $true
     } catch {
-        Write-Verbose "PwshSpectreConsole import failed: $($_.Exception.Message)"
+        Write-LaunchLog "PwshSpectreConsole import failed: $($_.Exception.Message)" 'WARN'
         $script:LocalLLMSpectreState = $false
         return $false
     }
@@ -265,6 +265,10 @@ function Show-ModelDetailSpectre {
     }
     $headerLines.Add(("[grey70]Source[/]    : {0}" -f (ConvertTo-LocalLLMSpectreSafe $source))) | Out-Null
     $headerLines.Add(("[grey70]Parser[/]    : {0}    [grey70]LimitTools[/]: {1}" -f (ConvertTo-LocalLLMSpectreSafe $parser), $limitTools)) | Out-Null
+
+    if ($def.ContainsKey('VisionModule') -and -not [string]::IsNullOrWhiteSpace($def.VisionModule)) {
+        $headerLines.Add(("[grey70]Vision[/]   : {0}" -f (ConvertTo-LocalLLMSpectreSafe $def.VisionModule))) | Out-Null
+    }
 
     if ($def.ContainsKey('ParserNote') -and $def.ParserNote) {
         $headerLines.Add(("[grey50]Note[/]      : {0}" -f (ConvertTo-LocalLLMSpectreSafe $def.ParserNote))) | Out-Null
@@ -508,6 +512,10 @@ function Show-ModelDetailFallback {
     Write-Host "  Source : $source" -ForegroundColor DarkGray
     Write-Host "  Parser : $($def.Parser)    LimitTools: $([bool]$def.LimitTools)" -ForegroundColor DarkGray
 
+    if ($def.ContainsKey('VisionModule') -and -not [string]::IsNullOrWhiteSpace($def.VisionModule)) {
+        Write-Host "  Vision : $($def.VisionModule)" -ForegroundColor DarkGray
+    }
+
     if ($def.ContainsKey('ParserNote') -and $def.ParserNote) {
         Write-Host "  Note   : $($def.ParserNote)" -ForegroundColor DarkGray
     }
@@ -586,7 +594,7 @@ function Show-LocalBoxCommandReference {
     }
 
     Write-Host "LocalBox model commands" -ForegroundColor Green
-    Write-Host "  One function is generated for each configured model. Use -Ctx, -Chat, -Codex, -Q8, -Strict, -Unshackled, and -Quant where supported." -ForegroundColor DarkGray
+    Write-Host "  One function is generated for each configured model. Use -Ctx, -Chat, -Codex, -Q8, -Strict, -Unshackled, -UseVision, and -Quant where supported." -ForegroundColor DarkGray
     foreach ($key in (@(Get-ModelKeys) | Sort-Object)) {
         $def = Get-ModelDef -Key $key
         $name = Get-ModelShortcutName -Def $def
@@ -614,6 +622,7 @@ function Show-LocalBoxCommandReference {
     Write-CommandRow -Command "llmdefaultcodex" -Description "Launch the default model through Codex."
     Write-CommandRow -Command "llmdefaultchat" -Description "Launch the default model as plain Ollama chat."
     Write-CommandRow -Command "llmlogerr, llmlogerrclear" -Description "Show or clear wizard error logs."
+    Write-CommandRow -Command "llmlog" -Description "Show launch debug log (~/.local-llm/launch.log)."
 
     Write-Host ""
     Write-Host "LocalBox model setup and catalog" -ForegroundColor Green
@@ -791,6 +800,8 @@ One function per model — flags select what to do.
   q36p -Chat                    Raw ollama chat, no Claude Code
   q36p -Q8                      Use q8 KV cache for higher quality
   q36p -Quant q6kp              Switch the GGUF quant (rebuilds aliases)
+  q36p -UseVision               Launch with vision (mmproj) support
+  llm -UseVision                Same, via wizard (skips vision prompt if mmproj available)
   llmdefault                    Launch the configured Default model
   llm                           Guided wizard (Spectre when available)
   llmc                          Native selectable wizard
@@ -804,6 +815,7 @@ Flags
                   Refused above $q8MaxLabel tokens — q8 KV at long context OOMs a 24GB card.
                   Override the threshold with: Set-LocalLLMSetting Q8KvMaxContext 262144
   -Quant <name>   Switch the model's selected quant (no launch). GGUF models only.
+  -UseVision      Enable vision/multimodal support (loads mmproj module). Requires a model with VisionModule configured or an mmproj-*.gguf file present.
 
 Tradeoffs / sizes
   Per-quant and per-context tradeoffs (file size, KV pressure, when to pick what)

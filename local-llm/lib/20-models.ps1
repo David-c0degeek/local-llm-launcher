@@ -354,3 +354,238 @@ function Get-ModelGgufPath {
 
     return $ggufPath
 }
+
+function Get-ModelVisionModulePath {
+    # Resolves the full path to the mmproj.gguf (multimodal vision module) for a model.
+    # Downloads on demand if not already present locally. Returns $null when no
+    # VisionModule is configured or the file does not exist.
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [ValidateSet('ollama', 'llamacpp')][string]$Backend = 'ollama'
+    )
+
+    $mmprojFile = $null
+    $autoDetected = $false
+
+    if ($Def.ContainsKey('VisionModule') -and -not [string]::IsNullOrWhiteSpace($Def.VisionModule)) {
+        $mmprojFile = [string]$Def.VisionModule
+        Write-LaunchLog "VisionModule configured: $mmprojFile" 'VISION'
+    } else {
+        # Auto-detect: scan for mmproj*.gguf in the model folder
+        $folder = Get-ModelFolder -Key $Key -Def $Def -Backend $Backend
+        Write-LaunchLog "No VisionModule configured — scanning for mmproj*.gguf in $folder" 'VISION'
+        $localMmproj = Get-ChildItem -Path $folder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
+        if ($localMmproj) {
+            $mmprojFile = $localMmproj.Name
+            $autoDetected = $true
+            Write-LaunchLog "Auto-detected mmproj: $($localMmproj.Name)" 'VISION'
+        } else {
+            # Also check Ollama root for llama.cpp backend
+            if ($Backend -eq 'llamacpp') {
+                $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+                Write-LaunchLog "Scanning Ollama root for mmproj*.gguf: $ollamaFolder" 'VISION'
+                $localMmproj = Get-ChildItem -Path $ollamaFolder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
+                if ($localMmproj) {
+                    $mmprojFile = $localMmproj.Name
+                    $autoDetected = $true
+                    Write-LaunchLog "Auto-detected mmproj in Ollama root: $($localMmproj.Name)" 'VISION'
+                }
+            }
+        }
+        if (-not $mmprojFile) {
+            if ($Def.ContainsKey('Repo') -and -not [string]::IsNullOrWhiteSpace($Def.Repo)) {
+                Write-LaunchLog "No local mmproj found, querying HF: $($Def.Repo)" 'VISION'
+                $hfFiles = Get-HuggingFaceMmprojFiles -Repo $Def.Repo
+                if ($null -eq $hfFiles) {
+                    Write-LaunchLog "HF query failed (network/SSL) — skipping HF fallback for $Key" 'WARN'
+                } elseif ($hfFiles.Count -gt 0) {
+                    $mmprojFile = @($hfFiles.Keys)[0]
+                    Write-LaunchLog "Found mmproj on HF: $mmprojFile" 'VISION'
+                }
+            }
+            if (-not $mmprojFile) {
+                Write-LaunchLog "No mmproj found locally or on HF for $Key" 'WARN'
+                return $null
+            }
+        }
+    }
+
+    $folder = Get-ModelFolder -Key $Key -Def $Def -Backend $Backend
+
+    # For llama.cpp, try to hardlink from Ollama root first.
+    if ($Backend -eq 'llamacpp') {
+        $llamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $mmprojFile
+        if (Test-Path $llamaPath) {
+            Write-LaunchLog "Found existing mmproj in llama.cpp folder: $llamaPath" 'VISION'
+            return $llamaPath
+        }
+
+        $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+        $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $mmprojFile
+        if (Test-Path $ollamaPath) {
+            Write-LaunchLog "Found mmproj in Ollama root, linking to llama.cpp: $ollamaPath -> $llamaPath" 'VISION'
+            try {
+                New-Item -ItemType HardLink -Path $llamaPath -Target $ollamaPath -ErrorAction Stop | Out-Null
+                Write-Host "Hardlinked existing mmproj: $llamaPath -> $ollamaPath" -ForegroundColor DarkGreen
+                return $llamaPath
+            } catch {
+                try {
+                    Copy-Item -LiteralPath $ollamaPath -Destination $llamaPath -ErrorAction Stop | Out-Null
+                    Write-Host "Copied existing mmproj (cross-volume): $llamaPath" -ForegroundColor DarkGreen
+                    return $llamaPath
+                } catch {
+                    Write-Warning "Could not reuse Ollama mmproj at $ollamaPath : $($_.Exception.Message)"
+                }
+            }
+        } else {
+            Write-LaunchLog "mmproj not in Ollama root, will download to $folder" 'VISION'
+        }
+    }
+
+    if ($autoDetected) {
+        Write-LaunchLog "Reusing auto-detected mmproj: $mmprojFile" 'VISION'
+        $localPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $mmprojFile
+        if (Test-Path $localPath) {
+            return $localPath
+        }
+    }
+
+    Write-LaunchLog "Downloading mmproj from HF repo: $($Def.Repo), file: $mmprojFile" 'VISION'
+    $mmprojPath = Download-HuggingFaceFile -Repo $Def.Repo -FileName $mmprojFile -DestinationFolder $folder
+
+    if ($mmprojPath -is [array]) {
+        $mmprojPath = $mmprojPath[-1]
+    }
+
+    if (-not ($mmprojPath -is [string])) {
+        throw "Expected mmproj path to be a string."
+    }
+
+    Write-LaunchLog "Resolved mmproj path: $mmprojPath" 'VISION'
+    return $mmprojPath
+}
+
+function Test-ModelVisionModuleAvailable {
+    # Checks whether the mmproj.gguf for a model exists locally, and if not,
+    # whether it is available on HuggingFace. Returns a hashtable with:
+    #   Local        : $true/$false  (file exists in the model folder or Ollama root)
+    #   AvailableOnHF: $true/$false  (mmproj file listed on the HF repo)
+    #   Filename     : ''            (the mmproj filename, when known)
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Def,
+        [ValidateSet('ollama', 'llamacpp')][string]$Backend = 'ollama'
+    )
+
+    $result = @{
+        Local           = $false
+        AvailableOnHF   = $false
+        Filename        = ''
+    }
+
+    # Determine which mmproj filename to look for. If VisionModule is configured, use that;
+    # otherwise scan HF for any available mmproj files.
+    $mmprojFile = if ($Def.ContainsKey('VisionModule') -and -not [string]::IsNullOrWhiteSpace($def.VisionModule)) {
+        Write-LaunchLog "[vision/test] VisionModule configured: $($def.VisionModule)"  'VISION'
+        [string]$Def.VisionModule
+    } else {
+        Write-LaunchLog "[vision/test] No VisionModule configured, will auto-detect"  'VISION'
+        ''
+    }
+
+    if ($mmprojFile) {
+        $result.Filename = $mmprojFile
+    }
+    $folder = Get-ModelFolder -Key $Key -Def $Def -Backend $Backend
+    Write-LaunchLog "[vision/test] Checking local mmproj for $Key (backend=$Backend, folder=$folder)"  'VISION'
+
+    # Check llama.cpp folder first.
+    if ($Backend -eq 'llamacpp') {
+        if ($mmprojFile) {
+            $llamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $folder -FileName $mmprojFile
+            Write-LaunchLog "[vision/test]  llama.cpp: checking $($llamaPath) ..."  'VISION'
+            if (Test-Path $llamaPath) {
+                Write-LaunchLog "[vision/test]  Found in llama.cpp folder"  'VISION'
+                $result.Local = $true
+                return $result
+            }
+        } else {
+            # No VisionModule configured — scan for any mmproj files locally
+            $localMmproj = Get-ChildItem -Path $folder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
+            if ($localMmproj) {
+                Write-LaunchLog "[vision/test]  Auto-detected $($localMmproj.Name) in llama.cpp folder"  'VISION'
+                $result.Local = $true
+                $result.Filename = $localMmproj.Name
+                return $result
+            }
+        }
+
+        # Also check Ollama root as fallback.
+        $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+        if ($mmprojFile) {
+            $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $mmprojFile
+            Write-LaunchLog "[vision/test]  Ollama root: checking $($ollamaPath) ..."  'VISION'
+            if (Test-Path $ollamaPath) {
+                Write-LaunchLog "[vision/test]  Found in Ollama root"
+                $result.Local = $true
+                return $result
+            }
+        } else {
+            $localMmproj = Get-ChildItem -Path $ollamaFolder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
+            if ($localMmproj) {
+                Write-LaunchLog "[vision/test]  Auto-detected $($localMmproj.Name) in Ollama root"  'VISION'
+                $result.Local = $true
+                $result.Filename = $localMmproj.Name
+                return $result
+            }
+        }
+    }
+
+    # Check Ollama root for ollama backend.
+    if ($Backend -eq 'ollama') {
+        $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+        if ($mmprojFile) {
+            $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $mmprojFile
+            Write-LaunchLog "[vision/test]  Ollama: checking $($ollamaPath) ..."  'VISION'
+            if (Test-Path $ollamaPath) {
+                Write-LaunchLog "[vision/test]  Found in Ollama folder"  'VISION'
+                $result.Local = $true
+                return $result
+            }
+        } else {
+            $localMmproj = Get-ChildItem -Path $ollamaFolder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
+            if ($localMmproj) {
+                Write-LaunchLog "[vision/test]  Auto-detected $($localMmproj.Name) in Ollama root"  'VISION'
+                $result.Local = $true
+                $result.Filename = $localMmproj.Name
+                return $result
+            }
+        }
+    }
+
+    Write-LaunchLog "[vision/test] No local mmproj found for $Key, checking HuggingFace..."  'VISION'
+
+    # Not local — check HF for availability.
+    if ($Def.ContainsKey('Repo') -and -not [string]::IsNullOrWhiteSpace($Def.Repo)) {
+        $mmprojFiles = Get-HuggingFaceMmprojFiles -Repo $Def.Repo
+        if ($null -eq $mmprojFiles) {
+            Write-LaunchLog "[vision/test] HF check skipped for $Key (network/SSL error)" 'WARN'
+        } elseif ($mmprojFiles.Count -gt 0) {
+            Write-LaunchLog "[vision/test] HF has $($mmprojFiles.Count) mmproj file(s): $($mmprojFiles.Keys -join ', ')"  'VISION'
+            $result.AvailableOnHF = $true
+            # If no specific VisionModule configured, pick the first available mmproj
+            if (-not $mmprojFile) {
+                $mmprojFile = @($mmprojFiles.Keys)[0]
+                $result.Filename = $mmprojFile
+            } elseif ($mmprojFiles.ContainsKey($mmprojFile)) {
+                $result.AvailableOnHF = $true
+            }
+        } else {
+            Write-LaunchLog "[vision/test] No mmproj files on HF for $($Def.Repo)"  'VISION'
+        }
+    }
+
+    Write-LaunchLog "[vision/test] Result for ${Key}: Local=$($result.Local), HF=$($result.AvailableOnHF), File='$($result.Filename)'"  'VISION'
+    return $result
+}

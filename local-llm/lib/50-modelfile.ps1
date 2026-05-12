@@ -7,7 +7,8 @@ function New-OllamaModelFromSource {
         [Parameter(Mandatory = $true)][string]$ModelName,
         [Parameter(Mandatory = $true)][string]$FromSource,
         [Parameter(Mandatory = $true)][string]$Parser,
-        [Nullable[int]]$NumCtx
+        [Nullable[int]]$NumCtx,
+        [string]$VisionModulePath
     )
 
     $safeName = ($ModelName -replace '[:/\\]', '_')
@@ -15,6 +16,10 @@ function New-OllamaModelFromSource {
 
     $content = New-Object System.Collections.Generic.List[string]
     $content.Add("FROM $FromSource")
+
+    if (-not [string]::IsNullOrWhiteSpace($VisionModulePath)) {
+        $content.Add("VISION $VisionModulePath")
+    }
 
     foreach ($line in (Get-ParserLines -Parser $Parser)) {
         $content.Add($line)
@@ -46,7 +51,8 @@ function New-OllamaStrictAlias {
     param(
         [Parameter(Mandatory = $true)][string]$BaseAliasName,
         [Parameter(Mandatory = $true)][string]$StrictAliasName,
-        [Nullable[int]]$NumCtx
+        [Nullable[int]]$NumCtx,
+        [AllowEmptyString()][string]$VisionModulePath = ''
     )
 
     $safeName = ($StrictAliasName -replace '[:/\\]', '_')
@@ -54,6 +60,10 @@ function New-OllamaStrictAlias {
 
     $content = New-Object System.Collections.Generic.List[string]
     $content.Add("FROM ${BaseAliasName}:latest")
+
+    if (-not [string]::IsNullOrWhiteSpace($VisionModulePath)) {
+        $content.Add("VISION $VisionModulePath")
+    }
 
     foreach ($line in (Get-StrictModelfileLines)) {
         $content.Add($line)
@@ -167,7 +177,8 @@ function Ensure-ModelAlias {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ContextKey,
-        [switch]$ForceRebuild
+        [switch]$ForceRebuild,
+        [string]$VisionModulePath
     )
 
     $def = Get-ModelDef -Key $Key
@@ -186,14 +197,14 @@ function Ensure-ModelAlias {
                 throw "ollama pull failed for '$($def.RemoteModel)'"
             }
 
-            New-OllamaModelFromSource -ModelName $modelName -FromSource $def.RemoteModel -Parser $def.Parser -NumCtx $numCtx
+            New-OllamaModelFromSource -ModelName $modelName -FromSource $def.RemoteModel -Parser $def.Parser -NumCtx $numCtx -VisionModulePath $VisionModulePath
         }
 
         "gguf" {
             $ggufPath = Get-ModelGgufPath -Key $Key -Def $def
             $posixPath = Convert-ToPosixPath $ggufPath
 
-            New-OllamaModelFromSource -ModelName $modelName -FromSource $posixPath -Parser $def.Parser -NumCtx $numCtx
+            New-OllamaModelFromSource -ModelName $modelName -FromSource $posixPath -Parser $def.Parser -NumCtx $numCtx -VisionModulePath $VisionModulePath
         }
 
         default {
@@ -221,15 +232,18 @@ function Ensure-ModelStrictAlias {
     $baseName = Get-ModelAliasName -Def $def -ContextKey $baseCtxKey
     $numCtx = Get-ModelContextValue -Def $def -ContextKey $baseCtxKey
 
+    # Resolve vision module so the strict alias gets an explicit VISION instruction.
+    $visionModulePath = Get-ModelVisionModulePath -Key $Key -Def $def -Backend ollama
+
     if (-not $ForceRebuild -and (Test-StrictAliasFresh -StrictAliasName $strictName -NumCtx $numCtx)) {
         return $strictName
     }
 
     # The strict sibling derives FROM the base alias. Make sure the base
     # exists first; build it if missing (Ensure-ModelAlias is idempotent).
-    Ensure-ModelAlias -Key $Key -ContextKey $baseCtxKey | Out-Null
+    Ensure-ModelAlias -Key $Key -ContextKey $baseCtxKey -VisionModulePath $visionModulePath | Out-Null
 
-    New-OllamaStrictAlias -BaseAliasName $baseName -StrictAliasName $strictName -NumCtx $numCtx
+    New-OllamaStrictAlias -BaseAliasName $baseName -StrictAliasName $strictName -NumCtx $numCtx -VisionModulePath $visionModulePath
     return $strictName
 }
 
@@ -240,9 +254,10 @@ function Ensure-ModelAllAliases {
     )
 
     $def = Get-ModelDef -Key $Key
+    $visionModulePath = Get-ModelVisionModulePath -Key $Key -Def $def -Backend ollama
 
     foreach ($contextKey in $def.Contexts.Keys) {
-        Ensure-ModelAlias -Key $Key -ContextKey $contextKey -ForceRebuild:$ForceRebuild | Out-Null
+        Ensure-ModelAlias -Key $Key -ContextKey $contextKey -ForceRebuild:$ForceRebuild -VisionModulePath $visionModulePath | Out-Null
     }
 
     if (Get-ModelStrictEnabled -Def $def) {

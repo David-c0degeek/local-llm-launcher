@@ -12,6 +12,7 @@ function Invoke-ModelShortcut {
         [switch]$Codex,
         [switch]$Chat,
         [switch]$Strict,
+        [switch]$UseVision,
         [string[]]$ExtraUnshackledArgs
     )
 
@@ -40,10 +41,32 @@ function Invoke-ModelShortcut {
         }
     }
 
+    # Resolve vision module (mmproj) on demand when user opts in; always log availability.
+    $visionModulePath = if ($UseVision) {
+        Write-LaunchLog "Resolving vision module for Ollama launch (model=$Key)" 'VISION'
+        $result = Get-ModelVisionModulePath -Key $Key -Def $def -Backend ollama
+        if ($result) {
+            Write-LaunchLog "Vision module resolved: $([System.IO.Path]::GetFileName($result))" 'VISION'
+        } else {
+            Write-LaunchLog "No vision module found for $Key (Ollama)" 'WARN'
+        }
+        $result
+    } else {
+        $avail = Test-ModelVisionModuleAvailable -Key $Key -Def $def -Backend ollama
+        if ($avail.Local) {
+            Write-LaunchLog "Vision available locally ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
+        } elseif ($avail.AvailableOnHF) {
+            Write-LaunchLog "Vision available on HuggingFace ($($avail.Filename)) — not loaded (no -UseVision)" 'VISION'
+        } else {
+            Write-LaunchLog "No vision module available for $Key (Ollama)" 'VISION'
+        }
+        ''
+    }
+
     $modelName = if ($Strict) {
         Ensure-ModelStrictAlias -Key $Key -ContextKey $ContextKey
     } else {
-        Ensure-ModelAlias -Key $Key -ContextKey $ContextKey
+        Ensure-ModelAlias -Key $Key -ContextKey $ContextKey -VisionModulePath $(if ($visionModulePath) { $visionModulePath } else { '' })
     }
 
     if ($Chat) {
@@ -62,6 +85,8 @@ function Invoke-ModelShortcut {
     } else {
         "strip"
     }
+
+    Write-LaunchLog "Ollama launch: model=$modelName vision=[$visionModulePath] unshackled=$Unshackled codex=$Codex strict=$Strict" 'LAUNCH'
 
     $startArgs = @{
         Model          = $modelName

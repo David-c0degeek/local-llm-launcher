@@ -89,10 +89,12 @@ function Download-HuggingFaceFile {
                 "uvx-hf" {
                     $oldPythonUtf8 = $env:PYTHONUTF8
                     $oldPythonIoEncoding = $env:PYTHONIOENCODING
+                    $oldHfSsl = $env:HF_HUB_DISABLE_SSL_VERIFICATION
 
                     try {
                         $env:PYTHONUTF8 = "1"
                         $env:PYTHONIOENCODING = "utf-8"
+                        $env:HF_HUB_DISABLE_SSL_VERIFICATION = "1"
 
                         & uvx hf download $Repo $normalizedFileName --local-dir $DestinationFolder | Out-Host
 
@@ -119,6 +121,13 @@ function Download-HuggingFaceFile {
                         else {
                             Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
                         }
+
+                        if ($null -ne $oldHfSsl) {
+                            $env:HF_HUB_DISABLE_SSL_VERIFICATION = $oldHfSsl
+                        }
+                        else {
+                            Remove-Item Env:HF_HUB_DISABLE_SSL_VERIFICATION -ErrorAction SilentlyContinue
+                        }
                     }
                 }
 
@@ -144,6 +153,7 @@ function Download-HuggingFaceFile {
                         $request.Method = "GET"
                         $request.AllowAutoRedirect = $true
                         $request.UserAgent = "LocalLLMProfile/1.0"
+                        $request.ServerCertificateValidationCallback = { $true }
 
                         if ($existingBytes -gt 0) {
                             $request.AddRange($existingBytes)

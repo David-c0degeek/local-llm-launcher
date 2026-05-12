@@ -50,7 +50,7 @@ function Format-LlamaCppOverrides {
     param([Parameter(Mandatory = $true)]$Overrides)
 
     $parts = @()
-    foreach ($k in @('NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','FlashAttn','Mlock','NoMmap','KvK','KvV')) {
+    foreach ($k in @('NGpuLayers','NCpuMoe','UbatchSize','BatchSize','Threads','FlashAttn','Mlock','NoMmap','KvK','KvV','SwaFull','CachePrompt','CacheReuse')) {
         $value = $null
         $hasValue = $false
 
@@ -458,6 +458,7 @@ function Find-BestLlamaCppConfig {
         [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
+        [int[]]$NCpuMoeCandidates,
         [switch]$NoSave
     )
 
