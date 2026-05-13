@@ -382,7 +382,7 @@ function Get-ModelVisionModulePath {
             Write-LaunchLog "Auto-detected mmproj: $($localMmproj.Name)" 'VISION'
         } else {
             # Also check Ollama root for llama.cpp backend
-            if ($Backend -eq 'llamacpp') {
+            if ($Backend -eq 'llamacpp' -and -not [string]::IsNullOrWhiteSpace($script:Cfg.OllamaCommunityRoot)) {
                 $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
                 Write-LaunchLog "Scanning Ollama root for mmproj*.gguf: $ollamaFolder" 'VISION'
                 $localMmproj = Get-ChildItem -Path $ollamaFolder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
@@ -421,25 +421,27 @@ function Get-ModelVisionModulePath {
             return $llamaPath
         }
 
-        $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
-        $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $mmprojFile
-        if (Test-Path $ollamaPath) {
-            Write-LaunchLog "Found mmproj in Ollama root, linking to llama.cpp: $ollamaPath -> $llamaPath" 'VISION'
-            try {
-                New-Item -ItemType HardLink -Path $llamaPath -Target $ollamaPath -ErrorAction Stop | Out-Null
-                Write-Host "Hardlinked existing mmproj: $llamaPath -> $ollamaPath" -ForegroundColor DarkGreen
-                return $llamaPath
-            } catch {
+        if (-not [string]::IsNullOrWhiteSpace($script:Cfg.OllamaCommunityRoot)) {
+            $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+            $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $mmprojFile
+            if (Test-Path $ollamaPath) {
+                Write-LaunchLog "Found mmproj in Ollama root, linking to llama.cpp: $ollamaPath -> $llamaPath" 'VISION'
                 try {
-                    Copy-Item -LiteralPath $ollamaPath -Destination $llamaPath -ErrorAction Stop | Out-Null
-                    Write-Host "Copied existing mmproj (cross-volume): $llamaPath" -ForegroundColor DarkGreen
+                    New-Item -ItemType HardLink -Path $llamaPath -Target $ollamaPath -ErrorAction Stop | Out-Null
+                    Write-Host "Hardlinked existing mmproj: $llamaPath -> $ollamaPath" -ForegroundColor DarkGreen
                     return $llamaPath
                 } catch {
-                    Write-Warning "Could not reuse Ollama mmproj at $ollamaPath : $($_.Exception.Message)"
+                    try {
+                        Copy-Item -LiteralPath $ollamaPath -Destination $llamaPath -ErrorAction Stop | Out-Null
+                        Write-Host "Copied existing mmproj (cross-volume): $llamaPath" -ForegroundColor DarkGreen
+                        return $llamaPath
+                    } catch {
+                        Write-Warning "Could not reuse Ollama mmproj at $ollamaPath : $($_.Exception.Message)"
+                    }
                 }
+            } else {
+                Write-LaunchLog "mmproj not in Ollama root, will download to $folder" 'VISION'
             }
-        } else {
-            Write-LaunchLog "mmproj not in Ollama root, will download to $folder" 'VISION'
         }
     }
 
@@ -522,22 +524,24 @@ function Test-ModelVisionModuleAvailable {
         }
 
         # Also check Ollama root as fallback.
-        $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
-        if ($mmprojFile) {
-            $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $mmprojFile
-            Write-LaunchLog "[vision/test]  Ollama root: checking $($ollamaPath) ..."  'VISION'
-            if (Test-Path $ollamaPath) {
-                Write-LaunchLog "[vision/test]  Found in Ollama root"
-                $result.Local = $true
-                return $result
-            }
-        } else {
-            $localMmproj = Get-ChildItem -Path $ollamaFolder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
-            if ($localMmproj) {
-                Write-LaunchLog "[vision/test]  Auto-detected $($localMmproj.Name) in Ollama root"  'VISION'
-                $result.Local = $true
-                $result.Filename = $localMmproj.Name
-                return $result
+        if (-not [string]::IsNullOrWhiteSpace($script:Cfg.OllamaCommunityRoot)) {
+            $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
+            if ($mmprojFile) {
+                $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $mmprojFile
+                Write-LaunchLog "[vision/test]  Ollama root: checking $($ollamaPath) ..."  'VISION'
+                if (Test-Path $ollamaPath) {
+                    Write-LaunchLog "[vision/test]  Found in Ollama root"
+                    $result.Local = $true
+                    return $result
+                }
+            } else {
+                $localMmproj = Get-ChildItem -Path $ollamaFolder -Filter 'mmproj*.gguf' -File | Select-Object -First 1
+                if ($localMmproj) {
+                    Write-LaunchLog "[vision/test]  Auto-detected $($localMmproj.Name) in Ollama root"  'VISION'
+                    $result.Local = $true
+                    $result.Filename = $localMmproj.Name
+                    return $result
+                }
             }
         }
     }
