@@ -15,5 +15,5 @@
   "LlamaCppDefaultMode": "native",
   "LlamaCppHealthCheckTimeoutSec": 300,
   "LlamaCppCoexistOllama": false,
-  "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,ToolSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop"
+  "LocalModelTools": "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,WebSearch,AskUserQuestion,PowerShell,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop"
 }

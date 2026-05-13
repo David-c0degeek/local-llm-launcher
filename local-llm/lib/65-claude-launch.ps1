@@ -119,6 +119,13 @@ function Set-ClaudeLocalEnv {
     # agent). Saves several KB of input tokens per turn — significant when
     # prefill is the bottleneck.
     $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
+
+    # Local Anthropic-compatible servers such as llama.cpp and Ollama do not
+    # implement Anthropic beta tool shapes like defer_loading/tool_reference.
+    # Without this, Unshackled may withhold real tools behind ToolSearch or
+    # send schema fields that local proxies tolerate inconsistently.
+    $env:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1"
+    $env:ENABLE_TOOL_SEARCH = "false"
 }
 
 function Start-NoThinkProxy {
@@ -151,7 +158,7 @@ function Start-NoThinkProxy {
         return
     }
 
-    Write-LaunchLog "Starting no-think proxy: python $proxyScript $port $target" 'PROXY'
+    Write-LaunchLog "Starting no-think proxy: python $proxyScript $($script:NoThinkProxyPort) $target" 'PROXY'
 
     if (-not (Test-Path $proxyScript)) {
         throw "No-think proxy not found: $proxyScript. Re-run install.ps1 so Claude/Unshackled launches do not point at a dead proxy URL."
@@ -680,7 +687,7 @@ function Start-ClaudeWithOllamaModel {
         $thinkingLabel = if ($keepThinking) { "kept (direct to Ollama)" } else { "disabled" }
 
         Write-Host ""
-        Write-Host "Launching ${$backendLabel} with $Model via Ollama..." -ForegroundColor Cyan
+        Write-Host "Launching $backendLabel with $Model via Ollama..." -ForegroundColor Cyan
         Write-Host "  Base URL : $($env:ANTHROPIC_BASE_URL)" -ForegroundColor DarkGray
         Write-Host "  Model    : $Model" -ForegroundColor DarkGray
         Write-Host "  Thinking : $thinkingLabel" -ForegroundColor DarkGray
@@ -1234,7 +1241,7 @@ function Start-ClaudeWithLlamaCppModel {
             )
         }
 
-        Write-LaunchLog "Launching ${$backendLabel}: model=$($def.Root) base=$effectiveBaseUrl unshackled=$Unshackled" 'LAUNCH'
+        Write-LaunchLog "Launching ${backendLabel}: model=$($def.Root) base=$effectiveBaseUrl unshackled=$Unshackled" 'LAUNCH'
 
         if ($Unshackled) {
             $extras = Get-UnshackledExtraArgs -Param $ExtraUnshackledArgs

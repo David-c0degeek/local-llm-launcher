@@ -193,6 +193,8 @@ function Get-LocalLLMClaudeEnvSnapshot {
     $env.DISABLE_PROMPT_CACHING         = '1'
     $env.API_TIMEOUT_MS                 = '1800000'
     $env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'
+    $env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1'
+    $env.ENABLE_TOOL_SEARCH = 'false'
 
     return $env
 }

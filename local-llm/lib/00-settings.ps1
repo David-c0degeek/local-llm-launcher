@@ -261,7 +261,11 @@ $script:ClaudeEnvNames = @(
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
     "CLAUDE_CODE_ATTRIBUTION_HEADER",
-    "DISABLE_PROMPT_CACHING"
+    "DISABLE_PROMPT_CACHING",
+    "API_TIMEOUT_MS",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+    "ENABLE_TOOL_SEARCH"
 )
 
 $script:LocalModelToolUseRules = @"
@@ -283,14 +287,13 @@ TaskUpdate: { taskId: string (required), status?: "pending"|"in_progress"|"compl
 TaskList: {}
 TaskGet: { taskId: string (required) }
 TaskStop: { task_id: string (required) }
-ToolSearch: { query: string (required) }
 "@
 
 function Get-LocalModelSystemPrompt {
     # No persona — local models already self-identify via their GGUF template.
     # Just return universal tool-use guidance, optionally with inline schemas
     # for the deferred Claude Code tools (helpful when --tools is restricted
-    # and the model can't reach for ToolSearch as easily).
+    # and the model needs exact parameter names without beta ToolSearch).
     param([switch]$IncludeInlineToolSchemas)
 
     $parts = @($script:LocalModelToolUseRules)
