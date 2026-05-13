@@ -1364,8 +1364,8 @@ function Start-LLMWizardClassic {
                 if (-not $visionAvail.Local -and $visionAvail.AvailableOnHF) {
                     Write-Host "Downloading vision module '$($visionAvail.Filename)' from HuggingFace..." -ForegroundColor Yellow
                     try {
-                        $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $def.Root
-                        Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $ollamaFolder | Out-Null
+                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def -Backend $backend
+                        Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $visionFolder | Out-Null
                         Write-Host "Downloaded '$($visionAvail.Filename)'." -ForegroundColor Green
                         $visionAvail.Local = $true
                     } catch {
@@ -2128,8 +2128,8 @@ function Start-LLMWizardSpectre {
                 if (-not $visionAvail.Local -and $visionAvail.AvailableOnHF) {
                     Write-Host "Downloading vision module '$($visionAvail.Filename)' from HuggingFace..." -ForegroundColor Yellow
                     try {
-                        $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $def.Root
-                        Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $ollamaFolder | Out-Null
+                        $visionFolder = Get-ModelFolder -Key $modelKey -Def $def -Backend $backend
+                        Download-HuggingFaceFile -Repo $def.Repo -FileName $visionAvail.Filename -DestinationFolder $visionFolder | Out-Null
                         Write-Host "Downloaded '$($visionAvail.Filename)'." -ForegroundColor Green
                         $visionAvail.Local = $true
                     } catch {
