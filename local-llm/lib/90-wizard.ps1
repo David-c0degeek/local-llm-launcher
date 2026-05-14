@@ -473,8 +473,8 @@ function Read-LLMYesNo {
 
 function Read-LLMTuneDepth {
     $items = @(
-        [pscustomobject]@{ Key = 'normal'; Label = 'Normal'; Description = 'Default tuner pass, budget 60' },
-        [pscustomobject]@{ Key = 'deep';   Label = 'Deep';   Description = 'Normal pass plus finer local refinement, budget 60 unless overridden' }
+        [pscustomobject]@{ Key = 'normal'; Label = 'Normal'; Description = 'Default tuner pass, budget 100' },
+        [pscustomobject]@{ Key = 'deep';   Label = 'Deep';   Description = 'Normal pass plus finer local refinement, budget 100 unless overridden' }
     )
 
     $idx = Read-LLMChoiceIndex `

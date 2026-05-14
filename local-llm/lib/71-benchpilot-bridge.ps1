@@ -171,7 +171,7 @@ function Invoke-BenchPilotLauncherFindBest {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
-        [int]$Budget = 60,
+        [int]$Budget = 100,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 3,
         [switch]$Quick,
