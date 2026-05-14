@@ -99,6 +99,7 @@ function Copy-OllamaGgufToLlamaCpp {
     $llamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $LlamaCppFolder -FileName $fileName
     if (Test-Path $llamaPath) { return $false }
 
+    if ([string]::IsNullOrWhiteSpace($script:Cfg.OllamaCommunityRoot)) { return $false }
     $ollamaFolder = Join-Path $script:Cfg.OllamaCommunityRoot $Def.Root
     $ollamaPath = Resolve-HuggingFaceLocalPath -DestinationFolder $ollamaFolder -FileName $fileName
     if (-not (Test-Path $ollamaPath)) { return $false }

@@ -446,7 +446,7 @@ function Find-BestLlamaCppConfig {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
-        [int]$Budget = 30,
+        [int]$Budget = 60,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 3,
         [switch]$Quick,
@@ -532,7 +532,7 @@ function findbest {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
-        [int]$Budget = 30,
+        [int]$Budget = 60,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 3,
         [switch]$Quick,
@@ -544,6 +544,7 @@ function findbest {
         [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
+        [int[]]$NCpuMoeCandidates,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
@@ -561,7 +562,7 @@ function tunellm {
         [ValidateSet('native','turboquant')][string]$Mode = 'native',
         [string]$Quant,
         [string[]]$AllowedKvTypes,
-        [int]$Budget = 30,
+        [int]$Budget = 60,
         [ValidateSet('gen','prompt','both','coding-agent')][string]$Optimize = 'coding-agent',
         [int]$Runs = 3,
         [switch]$Quick,
@@ -573,6 +574,7 @@ function tunellm {
         [ValidateSet('pure','balanced','both')][string]$Profile = 'pure',
         [ValidateSet('greedy','beam')][string]$SearchStrategy,
         [int]$BeamWidth = 1,
+        [int[]]$NCpuMoeCandidates,
         [switch]$NoSave
     )
     if (-not $PromptLengths -or $PromptLengths.Count -eq 0) {
@@ -581,3 +583,4 @@ function tunellm {
     }
     Find-BestLlamaCppConfig @PSBoundParameters
 }
+
