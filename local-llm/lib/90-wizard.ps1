@@ -490,6 +490,31 @@ function Read-LLMTuneDepth {
     return [string]$items[$idx].Key
 }
 
+function Read-LLMTuneBudget {
+    $items = @(
+        [pscustomobject]@{ Key = '100';    Label = '100';    Description = 'Default — standard for all models' },
+        [pscustomobject]@{ Key = '150';    Label = '150';    Description = 'Extended — MoE with moderate option set' },
+        [pscustomobject]@{ Key = '200';    Label = '200';    Description = 'High — MoE with wide option set' },
+        [pscustomobject]@{ Key = 'custom'; Label = 'Custom'; Description = 'Enter a custom value' }
+    )
+
+    $idx = Read-LLMChoiceIndex `
+        -Title "Budget (max benchmarks per run)" `
+        -Items $items `
+        -ZeroLabel "Back" `
+        -Label { param($item, $i) "$($item.Label)  -  $($item.Description)" }
+
+    if ($idx -lt 0) { return $null }
+    if ($items[$idx].Key -eq 'custom') {
+        $raw = Read-Host "Budget (integer, e.g. 120)"
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        if ($raw -match '^\d+$' -and [int]$raw -gt 0) { return [int]$raw }
+        Write-Warning "Invalid value '$raw'. Using default 100."
+        return 100
+    }
+    return [int]$items[$idx].Key
+}
+
 function Read-LLMTuneOptimize {
     $items = @(
         [pscustomobject]@{ Key = 'coding-agent'; Label = 'Coding agent'; Description = 'Long-prompt end-to-end latency for Claude Code/Unshackled' },
@@ -647,6 +672,16 @@ function Invoke-LlamaCppTunerWizardFlow {
     if ([string]::IsNullOrWhiteSpace($depth)) { return }
     $useDeep = $depth -eq 'deep'
 
+    $budget = 100
+    if ($useDeep) {
+        $budget = if ($UseSpectrePrompts) {
+            Read-LLMTuneBudgetSpectre
+        } else {
+            Read-LLMTuneBudget
+        }
+        if ($null -eq $budget) { return }
+    }
+
     $optimize = if ($UseSpectrePrompts) {
         Read-LLMTuneOptimizeSpectre
     } else {
@@ -684,15 +719,16 @@ function Invoke-LlamaCppTunerWizardFlow {
     }
 
     $findParams = @{
-        Key           = $ModelKey
-        ContextKey    = $ContextKey
-        Mode          = $Mode
-        Quant         = $quant
+        Key            = $ModelKey
+        ContextKey     = $ContextKey
+        Mode           = $Mode
+        Quant          = $quant
         AllowedKvTypes = $allowedKvTypes
-        Deep          = $useDeep
-        Optimize      = $optimize
-        Profile       = $selectionProfile
-        NoSave        = $true
+        Deep           = $useDeep
+        Budget         = $budget
+        Optimize       = $optimize
+        Profile        = $selectionProfile
+        NoSave         = $true
     }
     if ($ncpuMoeCandidates -and $ncpuMoeCandidates.Count -gt 0) {
         $findParams.NCpuMoeCandidates = [int[]]$ncpuMoeCandidates
@@ -1893,6 +1929,27 @@ function Read-LLMTuneDepthSpectre {
     if ($null -eq $chosen) { return $null }
     if ($chosen -eq '[[Back]]') { return $null }
     return [string]$choices[$chosen]
+}
+
+function Read-LLMTuneBudgetSpectre {
+    $choices = [ordered]@{
+        '100    -  default, standard for all models'     = 100
+        '150    -  extended, MoE with moderate option set' = 150
+        '200    -  high, MoE with wide option set'       = 200
+        'Custom -  enter a custom value'                 = 'custom'
+        '[[Back]]'                                       = '__back__'
+    }
+    $chosen = Read-SpectreSelection -Message "Budget (max benchmarks per run)" -Choices @($choices.Keys) -PageSize 6
+    if ($null -eq $chosen) { return 100 }
+    if ($chosen -eq '[[Back]]') { return $null }
+    $val = $choices[$chosen]
+    if ($val -eq 'custom') {
+        $raw = Read-Host "Budget (integer, e.g. 120)"
+        if ($raw -match '^\d+$' -and [int]$raw -gt 0) { return [int]$raw }
+        Write-Warning "Invalid value. Using default 100."
+        return 100
+    }
+    return [int]$val
 }
 
 function Read-LLMTuneOptimizeSpectre {
