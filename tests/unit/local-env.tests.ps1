@@ -53,4 +53,11 @@ Describe 'Local Claude environment' {
 
         $prompt | Should -Not -Match 'ToolSearch'
     }
+
+    It 'tells local models to force text for PowerShell object projections' {
+        $prompt = Get-LocalModelSystemPrompt
+
+        $prompt | Should -Match 'Select-Object'
+        $prompt | Should -Match 'Out-String -Width 4096'
+    }
 }

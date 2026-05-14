@@ -274,6 +274,7 @@ TOOL USE RULES (follow strictly):
 2. Edit requires BOTH old_string AND new_string always. To delete content, set new_string to "". Never omit new_string.
 3. If Edit fails with old_string not found: immediately use Read to get the real current content, then retry with the exact string from the Read result.
 4. After any Bash/Write/Edit that modifies a file, do not assume you know the new content — use Read if you need to reference it again.
+5. For PowerShell commands that project or format objects (Select-Object, Format-Table, Format-List, calculated properties), force plain text with Out-String -Width 4096 or ConvertTo-Json -Depth 6 before returning the result.
 "@
 
 $script:LocalModelDeferredToolSchemas = @"
