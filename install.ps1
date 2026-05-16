@@ -516,7 +516,7 @@ if ($installFiles) {
     Install-Dir-Files `
         -SourceDir (Join-Path $RepoRoot "local-llm") `
         -TargetDir $DeployedLocalLLM `
-        -Files @("LocalLLMProfile.ps1", "llm-models.json")
+        -Files @("LocalLLMProfile.ps1", "llm-models.json", "defaults.json")
 
     # lib/ is the modular code tree dot-sourced by LocalLLMProfile.ps1.
     # Install every *.ps1 in there, mirroring the source order so a fresh

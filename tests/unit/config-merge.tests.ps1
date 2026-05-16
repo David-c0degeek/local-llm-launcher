@@ -96,6 +96,14 @@ Describe 'Import-LocalLLMConfig precedence' {
         Remove-Item -Recurse -Force $root
     }
 
+    It 'rejects a pure catalog when defaults.json is missing' {
+        $root = New-TempProfile `
+            -Catalog @{ Models = $script:MinimalModels; CommandAliases = @{} }
+
+        { Invoke-ConfigLoad -Root $root } | Should -Throw -ExpectedMessage '*defaults.json*missing*pure catalog*'
+        Remove-Item -Recurse -Force $root
+    }
+
     It 'has defaults.json take precedence over legacy catalog scalars' {
         # Both shapes present: shipped defaults wins over stale legacy scalars.
         $catalog = @{

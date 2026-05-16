@@ -103,6 +103,13 @@ function Import-LocalLLMConfig {
         Write-Warning $msg
     }
 
+    if ($defaults.Count -eq 0 -and $legacyScalars.Count -eq 0) {
+        $defaultsPath = Get-LocalLLMDefaultsPath
+        throw ("LocalBox defaults.json is missing or unreadable at {0}, and {1} is a pure catalog. " +
+            "Re-run install.ps1 or copy local-llm\defaults.json next to llm-models.json before launching; " +
+            "otherwise required launcher defaults such as LocalModelTools are unavailable.") -f $defaultsPath, (Split-Path -Leaf $script:LocalLLMConfigPath)
+    }
+
     $cfg = @{}
 
     # defaults.json: lowest precedence.
